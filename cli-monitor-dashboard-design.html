@@ -1,0 +1,1704 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Coding App Workspace Design</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --surface-2: #f9fafb;
+      --line: #dfe4ea;
+      --text: #17202a;
+      --muted: #687386;
+      --codex: #0d8a72;
+      --claude: #bd5b2f;
+      --antigravity: #4c6fff;
+      --green: #15803d;
+      --amber: #b7791f;
+      --red: #b42318;
+      --ink-soft: #2f3a4a;
+      --shadow: 0 16px 42px rgba(24, 35, 53, .08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, .7), rgba(255, 255, 255, 0) 340px),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, "SF Pro Display", "SF Pro Text", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: #fbfcfd;
+      border-right: 1px solid var(--line);
+      padding: 22px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 8px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: #111827;
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    .brand-name {
+      font-size: 17px;
+      font-weight: 760;
+      line-height: 1.1;
+    }
+
+    .brand-meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+
+    .nav-section {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav-title {
+      color: #8a94a6;
+      font-size: 11px;
+      font-weight: 720;
+      text-transform: uppercase;
+      padding: 0 10px 5px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 40px;
+      padding: 0 10px;
+      border-radius: 8px;
+      color: var(--ink-soft);
+      font-size: 14px;
+      font-weight: 640;
+    }
+
+    .nav-item.active {
+      background: #111827;
+      color: #fff;
+      box-shadow: 0 8px 20px rgba(17, 24, 39, .18);
+    }
+
+    .nav-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .nav-icon {
+      width: 20px;
+      color: currentColor;
+      text-align: center;
+      font-size: 14px;
+      opacity: .9;
+    }
+
+    .count {
+      min-width: 28px;
+      height: 20px;
+      padding: 0 7px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #ecf0f4;
+      color: #445066;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .active .count {
+      background: rgba(255, 255, 255, .14);
+      color: #fff;
+    }
+
+    .connector-mini {
+      margin-top: auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: var(--shadow);
+      display: grid;
+      gap: 10px;
+    }
+
+    .mini-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      display: inline-block;
+      margin-right: 6px;
+      background: var(--green);
+    }
+
+    .status-dot.warn {
+      background: var(--amber);
+    }
+
+    .main {
+      padding: 22px 26px 28px;
+      min-width: 0;
+    }
+
+    .topbar {
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .title p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .segmented {
+      display: inline-grid;
+      grid-template-columns: repeat(3, 56px);
+      height: 36px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .segment {
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 720;
+    }
+
+    .segment.active {
+      background: #111827;
+      color: #fff;
+    }
+
+    .icon-button,
+    .primary-button {
+      height: 36px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink-soft);
+      border-radius: 8px;
+      font-weight: 760;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 5px 16px rgba(17, 24, 39, .05);
+    }
+
+    .icon-button {
+      width: 38px;
+      font-size: 15px;
+    }
+
+    .primary-button {
+      padding: 0 13px;
+      color: #fff;
+      border-color: #111827;
+      background: #111827;
+      font-size: 13px;
+    }
+
+    .danger-button,
+    .ghost-button,
+    .send-button {
+      min-height: 34px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 780;
+      white-space: nowrap;
+    }
+
+    .ghost-button {
+      background: #fff;
+      color: var(--ink-soft);
+      padding: 0 10px;
+    }
+
+    .danger-button {
+      color: var(--red);
+      background: #fff7f5;
+      border-color: #f4c6c0;
+      padding: 0 10px;
+    }
+
+    .send-button {
+      color: #fff;
+      border-color: #111827;
+      background: #111827;
+      padding: 0 12px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(338px, .95fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .ops-grid {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .kpi {
+      min-height: 116px;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .kpi-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .kpi-value {
+      font-size: 30px;
+      line-height: .95;
+      font-weight: 820;
+      letter-spacing: 0;
+    }
+
+    .kpi-sub {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .trend-up {
+      color: var(--green);
+      font-weight: 780;
+    }
+
+    .trend-warn {
+      color: var(--amber);
+      font-weight: 780;
+    }
+
+    .panel-head {
+      min-height: 54px;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .panel-title {
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .panel-note {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 3px;
+    }
+
+    .chips {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chip {
+      height: 26px;
+      padding: 0 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .chip.active {
+      color: #17202a;
+      border-color: #c6ccd6;
+      background: #eef2f6;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: currentColor;
+      display: inline-block;
+    }
+
+    .dot.codex {
+      color: var(--codex);
+    }
+
+    .dot.claude {
+      color: var(--claude);
+    }
+
+    .dot.antigravity {
+      color: var(--antigravity);
+    }
+
+    .chart-wrap {
+      padding: 8px 16px 14px;
+      min-height: 260px;
+    }
+
+    .chart-meta {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .metric-strip {
+      min-height: 50px;
+      background: var(--surface-2);
+      border: 1px solid #edf0f3;
+      border-radius: 8px;
+      padding: 9px 10px;
+    }
+
+    .metric-strip strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 2px;
+    }
+
+    .metric-strip span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .chart {
+      width: 100%;
+      height: 190px;
+      display: block;
+    }
+
+    .quota-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 780;
+      font-size: 13px;
+      min-width: 0;
+    }
+
+    .token-list {
+      padding: 13px 16px 15px;
+      display: grid;
+      gap: 4px;
+    }
+
+    .token-row {
+      min-height: 54px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #edf0f3;
+    }
+
+    .token-row:last-child {
+      border-bottom: 0;
+    }
+
+    .token-breakdown {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .token-total {
+      text-align: right;
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 840;
+      white-space: nowrap;
+    }
+
+    .token-total span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 760;
+    }
+
+    .section-spacer {
+      height: 16px;
+    }
+
+    .task-panel {
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 13px 14px;
+      border-bottom: 1px solid #edf0f3;
+      vertical-align: middle;
+      font-size: 13px;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      background: #fbfcfd;
+      font-weight: 800;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .task-main {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .task-name {
+      font-weight: 760;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .task-path {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .badge {
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 780;
+      white-space: nowrap;
+    }
+
+    .badge.running {
+      color: #0f6f5f;
+      background: #e5f6f1;
+    }
+
+    .badge.done {
+      color: #38506d;
+      background: #edf2f7;
+    }
+
+    .badge.warn {
+      color: #8a520f;
+      background: #fff2d7;
+    }
+
+    .cli-cell {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .right-col {
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+
+    .connector-card {
+      padding-bottom: 4px;
+    }
+
+    .connector-row {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr) auto;
+      gap: 11px;
+      padding: 13px 16px;
+      border-bottom: 1px solid #edf0f3;
+      align-items: center;
+    }
+
+    .connector-row:last-child {
+      border-bottom: 0;
+    }
+
+    .logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 840;
+      font-size: 14px;
+    }
+
+    .logo.codex {
+      background: var(--codex);
+    }
+
+    .logo.claude {
+      background: var(--claude);
+    }
+
+    .logo.antigravity {
+      background: var(--antigravity);
+    }
+
+    .connector-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      margin-bottom: 3px;
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .connector-meta {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .connector-stat {
+      text-align: right;
+      min-width: 78px;
+    }
+
+    .connector-stat strong {
+      display: block;
+      font-size: 15px;
+    }
+
+    .connector-stat span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .ops-grid .connector-row {
+      grid-template-columns: 36px minmax(0, 1fr) 48px;
+      gap: 8px;
+      padding: 11px 12px;
+    }
+
+    .ops-grid .logo {
+      width: 34px;
+      height: 34px;
+      font-size: 12px;
+    }
+
+    .ops-grid .connector-stat {
+      min-width: 42px;
+    }
+
+    .control-card {
+      overflow: hidden;
+    }
+
+    .session-body {
+      padding: 12px 16px 15px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .session-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+    }
+
+    .session-tab {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      border-radius: 8px;
+      padding: 8px;
+      display: grid;
+      gap: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 720;
+    }
+
+    .session-tab.active {
+      border-color: rgba(13, 138, 114, .36);
+      background: #eef7f4;
+      color: #0f6f5f;
+    }
+
+    .session-tab strong {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .session-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .session-item {
+      min-height: 58px;
+      border: 1px solid #edf0f3;
+      background: #fff;
+      border-radius: 8px;
+      padding: 9px 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+    }
+
+    .session-item.active {
+      border-color: rgba(13, 138, 114, .34);
+      background: linear-gradient(90deg, rgba(13, 138, 114, .07), rgba(13, 138, 114, 0) 70%);
+    }
+
+    .session-name {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      font-weight: 800;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session-meta {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .session-stat {
+      min-width: 60px;
+      text-align: right;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .session-stat strong {
+      display: block;
+      color: var(--text);
+      font-size: 13px;
+      margin-bottom: 2px;
+    }
+
+    .control-body {
+      padding: 14px 16px 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .cli-switcher {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .cli-option {
+      min-height: 58px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      padding: 9px;
+      display: grid;
+      gap: 5px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .cli-option.active {
+      background: #eef7f4;
+      border-color: rgba(13, 138, 114, .35);
+      color: #0f6f5f;
+      box-shadow: inset 0 0 0 1px rgba(13, 138, 114, .08);
+    }
+
+    .cli-option strong {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      font-size: 13px;
+      min-width: 0;
+    }
+
+    .context-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #edf0f3;
+      background: #fff;
+    }
+
+    .context-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 760;
+      text-transform: uppercase;
+      margin-bottom: 3px;
+    }
+
+    .context-value {
+      font-size: 13px;
+      font-weight: 780;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .prompt-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .prompt-toolbar {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      background: #fbfcfd;
+      border-bottom: 1px solid #edf0f3;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .prompt-toolbar span {
+      white-space: nowrap;
+    }
+
+    .prompt-input {
+      min-height: 92px;
+      padding: 11px 12px;
+      color: #243044;
+      font-size: 13px;
+      line-height: 1.45;
+      background:
+        linear-gradient(90deg, rgba(13, 138, 114, .07), rgba(13, 138, 114, 0) 58px),
+        #fff;
+    }
+
+    .prompt-input .caret {
+      display: inline-block;
+      width: 7px;
+      height: 15px;
+      margin-left: 2px;
+      transform: translateY(2px);
+      background: #111827;
+    }
+
+    .control-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .template-row {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+
+    .template-chip {
+      height: 26px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: #f2f5f8;
+      border: 1px solid #e3e8ee;
+      color: var(--ink-soft);
+      display: inline-flex;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .permission-strip {
+      min-height: 38px;
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      padding: 10px;
+      border-radius: 8px;
+      background: #fff8e6;
+      color: #80520d;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .terminal-preview {
+      border: 1px solid #d9e0e8;
+      background: #151b24;
+      color: #d8e1ec;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .terminal-head {
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 10px;
+      background: #202938;
+      color: #9eabbc;
+      font-size: 11px;
+      font-weight: 720;
+    }
+
+    .terminal-body {
+      padding: 10px;
+      min-height: 76px;
+      display: grid;
+      gap: 5px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.38;
+    }
+
+    .terminal-line {
+      color: #b9c7d8;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .terminal-line strong {
+      color: #7ee0c4;
+      font-weight: 760;
+    }
+
+    .billing-list {
+      padding: 12px 16px 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .billing-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px solid #edf0f3;
+    }
+
+    .billing-item:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .billing-title {
+      font-weight: 780;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .billing-desc {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .billing-cost {
+      text-align: right;
+      font-weight: 820;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .drawer {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 260px;
+      gap: 16px;
+    }
+
+    .timeline {
+      padding: 12px 16px 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 74px minmax(0, 1fr) auto;
+      gap: 11px;
+      align-items: center;
+      font-size: 13px;
+    }
+
+    .event-time {
+      color: var(--muted);
+      font-weight: 720;
+    }
+
+    .event-name {
+      font-weight: 760;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .event-token {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .risk {
+      padding: 15px 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .risk-number {
+      font-size: 28px;
+      font-weight: 820;
+      color: var(--amber);
+    }
+
+    .risk-copy {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 1180px) {
+      .app {
+        grid-template-columns: 76px minmax(0, 1fr);
+      }
+
+      .brand-name,
+      .brand-meta,
+      .nav-title,
+      .nav-item span:not(.count),
+      .connector-mini {
+        display: none;
+      }
+
+      .nav-item {
+        justify-content: center;
+      }
+
+      .count {
+        display: none;
+      }
+
+      .grid,
+      .drawer,
+      .ops-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 900px) {
+      .main {
+        padding: 18px;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        height: auto;
+        flex-direction: column;
+      }
+
+      .kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .chart-meta {
+        grid-template-columns: 1fr;
+      }
+
+      th:nth-child(4),
+      td:nth-child(4),
+      th:nth-child(5),
+      td:nth-child(5) {
+        display: none;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .kpis {
+        grid-template-columns: 1fr;
+      }
+
+      .segmented {
+        grid-template-columns: repeat(3, 1fr);
+        width: 100%;
+      }
+
+      .actions {
+        width: 100%;
+        flex-wrap: wrap;
+      }
+
+      .primary-button {
+        flex: 1;
+      }
+
+      .session-tabs,
+      .cli-switcher,
+      .control-actions {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">AM</div>
+        <div>
+          <div class="brand-name">Agent Monitor</div>
+          <div class="brand-meta">AI Coding App 工作台</div>
+        </div>
+      </div>
+
+      <nav class="nav-section">
+        <div class="nav-title">监控视图</div>
+        <div class="nav-item active">
+          <div class="nav-left"><span class="nav-icon">▦</span><span>总览</span></div>
+          <span class="count">18</span>
+        </div>
+        <div class="nav-item">
+          <div class="nav-left"><span class="nav-icon">⌁</span><span>会话切换</span></div>
+          <span class="count">3</span>
+        </div>
+        <div class="nav-item">
+          <div class="nav-left"><span class="nav-icon">▶</span><span>执行中</span></div>
+          <span class="count">5</span>
+        </div>
+        <div class="nav-item">
+          <div class="nav-left"><span class="nav-icon">✓</span><span>已完成</span></div>
+          <span class="count">42</span>
+        </div>
+        <div class="nav-item">
+          <div class="nav-left"><span class="nav-icon">◌</span><span>费用与额度</span></div>
+          <span class="count">3</span>
+        </div>
+      </nav>
+
+      <nav class="nav-section">
+        <div class="nav-title">APP 来源</div>
+        <div class="nav-item">
+          <div class="nav-left"><span class="dot codex"></span><span>Codex</span></div>
+          <span class="count">8</span>
+        </div>
+        <div class="nav-item">
+          <div class="nav-left"><span class="dot claude"></span><span>Claude</span></div>
+          <span class="count">7</span>
+        </div>
+        <div class="nav-item">
+          <div class="nav-left"><span class="dot antigravity"></span><span>Antigravity</span></div>
+          <span class="count">5</span>
+        </div>
+      </nav>
+
+      <div class="connector-mini">
+        <div class="mini-row"><span><i class="status-dot"></i>采集服务</span><strong>正常</strong></div>
+        <div class="mini-row"><span><i class="status-dot"></i>本机日志</span><strong>3 个源</strong></div>
+        <div class="mini-row"><span><i class="status-dot warn"></i>额度提醒</span><strong>1 条</strong></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="title">
+          <h1>AI Coding App 整合工作台</h1>
+          <p>2026-06-06 · 统一监控 Codex、Claude、Antigravity 的任务、会话与指令</p>
+        </div>
+        <div class="actions">
+          <div class="segmented" aria-label="时间维度">
+            <div class="segment active">日</div>
+            <div class="segment">周</div>
+            <div class="segment">月</div>
+          </div>
+          <button class="icon-button" title="筛选">⌕</button>
+          <button class="icon-button" title="刷新">↻</button>
+          <button class="primary-button">导出报表</button>
+        </div>
+      </header>
+
+      <section class="kpis">
+        <div class="card kpi">
+          <div class="kpi-label"><span>执行中任务</span><span class="badge running">Live</span></div>
+          <div class="kpi-value">5</div>
+          <div class="kpi-sub"><span class="trend-up">+2</span><span>较 1 小时前</span></div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-label"><span>今日完成</span><span class="badge done">Done</span></div>
+          <div class="kpi-value">42</div>
+          <div class="kpi-sub"><span class="trend-up">86%</span><span>一次通过率</span></div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-label"><span>今日 Token</span><span>输入 + 输出</span></div>
+          <div class="kpi-value">2.84M</div>
+          <div class="kpi-sub"><span class="trend-warn">Codex 1.31M</span><span>今日最高用量</span></div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-label"><span>预估成本</span><span>混合计费</span></div>
+          <div class="kpi-value">¥126</div>
+          <div class="kpi-sub"><span>订阅覆盖 ¥84</span><span>按量 ¥42</span></div>
+        </div>
+      </section>
+
+      <div class="grid">
+        <section>
+          <div class="card">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">Token 用量趋势</div>
+                <div class="panel-note">按 App、模型、输入/输出拆分</div>
+              </div>
+              <div class="chips">
+                <span class="chip active"><span class="dot codex"></span>Codex</span>
+                <span class="chip active"><span class="dot claude"></span>Claude</span>
+                <span class="chip active"><span class="dot antigravity"></span>Antigravity</span>
+              </div>
+            </div>
+            <div class="chart-wrap">
+              <div class="chart-meta">
+                <div class="metric-strip"><strong>1.31M</strong><span>Codex · 今日</span></div>
+                <div class="metric-strip"><strong>980K</strong><span>Claude · 今日</span></div>
+                <div class="metric-strip"><strong>550K</strong><span>Antigravity · 今日</span></div>
+              </div>
+              <svg class="chart" viewBox="0 0 760 190" role="img" aria-label="Token 用量趋势图">
+                <defs>
+                  <pattern id="grid" width="1" height="38" patternUnits="userSpaceOnUse">
+                    <path d="M0 38H760" stroke="#e8edf2" stroke-width="1"></path>
+                  </pattern>
+                </defs>
+                <rect width="760" height="154" y="8" fill="url(#grid)"></rect>
+                <path d="M24 132 C80 118, 94 76, 146 82 S238 112, 284 75 S374 44, 420 64 S496 126, 542 95 S628 56, 736 38" fill="none" stroke="#0d8a72" stroke-width="4" stroke-linecap="round"></path>
+                <path d="M24 146 C80 140, 102 114, 148 122 S230 92, 286 110 S364 128, 420 94 S512 58, 562 72 S652 114, 736 84" fill="none" stroke="#bd5b2f" stroke-width="4" stroke-linecap="round"></path>
+                <path d="M24 154 C82 150, 120 142, 158 134 S244 116, 302 122 S390 142, 450 118 S544 98, 598 112 S680 138, 736 124" fill="none" stroke="#4c6fff" stroke-width="4" stroke-linecap="round"></path>
+                <g fill="#7a8495" font-size="12" font-weight="650">
+                  <text x="24" y="184">00:00</text>
+                  <text x="188" y="184">06:00</text>
+                  <text x="365" y="184">12:00</text>
+                  <text x="542" y="184">18:00</text>
+                  <text x="700" y="184">现在</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+
+          <div class="section-spacer"></div>
+
+          <div class="card task-panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">任务队列</div>
+                <div class="panel-note">执行中、已完成、异常中断统一展示</div>
+              </div>
+              <div class="chips">
+                <span class="chip active">全部</span>
+                <span class="chip">执行中</span>
+                <span class="chip">已完成</span>
+              </div>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 30%;">任务</th>
+                  <th style="width: 22%;">APP / 会话</th>
+                  <th style="width: 11%;">状态</th>
+                  <th style="width: 13%;">Token</th>
+                  <th style="width: 13%;">计费</th>
+                  <th style="width: 11%;">耗时</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <div class="task-main">
+                      <span class="task-name">修复登录态刷新失败</span>
+                      <span class="task-path">~/work/app-auth · main</span>
+                    </div>
+                  </td>
+                  <td><span class="cli-cell"><span class="dot codex"></span>Codex #C-184</span></td>
+                  <td><span class="badge running">执行中</span></td>
+                  <td>428K</td>
+                  <td>订阅</td>
+                  <td>18m</td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="task-main">
+                      <span class="task-name">生成 Q2 运营分析 SQL</span>
+                      <span class="task-path">remote: analytics-prod</span>
+                    </div>
+                  </td>
+                  <td><span class="cli-cell"><span class="dot claude"></span>Claude #CL-77</span></td>
+                  <td><span class="badge done">已完成</span></td>
+                  <td>186K</td>
+                  <td>按量</td>
+                  <td>9m</td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="task-main">
+                      <span class="task-name">重构日志采集器测试</span>
+                      <span class="task-path">~/agent-monitor · feature/collector</span>
+                    </div>
+                  </td>
+                  <td><span class="cli-cell"><span class="dot antigravity"></span>AG #AG-12</span></td>
+                  <td><span class="badge running">执行中</span></td>
+                  <td>92K</td>
+                  <td>免费额度</td>
+                  <td>6m</td>
+                </tr>
+                <tr>
+                  <td>
+                    <div class="task-main">
+                      <span class="task-name">更新前端看板布局</span>
+                      <span class="task-path">~/dashboard · develop</span>
+                    </div>
+                  </td>
+                  <td><span class="cli-cell"><span class="dot codex"></span>Codex #C-201</span></td>
+                  <td><span class="badge warn">中断</span></td>
+                  <td>314K</td>
+                  <td>订阅</td>
+                  <td>22m</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="section-spacer"></div>
+
+          <div class="card">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">实时事件流</div>
+                <div class="panel-note">任务启动、指令发送、工具调用、token 峰值、完成事件</div>
+              </div>
+            </div>
+            <div class="timeline">
+              <div class="event">
+                <div class="event-time">15:42</div>
+                <div class="event-name">Dashboard · 向 Codex #C-184 发送继续任务指令 · 等待执行</div>
+                <div class="event-token">预计 42K token</div>
+              </div>
+              <div class="event">
+                <div class="event-time">15:38</div>
+                <div class="event-name">Codex · 修复登录态刷新失败 · shell test 通过</div>
+                <div class="event-token">+38K token</div>
+              </div>
+              <div class="event">
+                <div class="event-time">15:33</div>
+                <div class="event-name">Claude · 生成 Q2 运营分析 SQL · 任务完成</div>
+                <div class="event-token">186K token</div>
+              </div>
+              <div class="event">
+                <div class="event-time">15:24</div>
+                <div class="event-name">Antigravity · 重构日志采集器测试 · 开始执行</div>
+                <div class="event-token">+92K token</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="right-col">
+          <div class="card">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">会话切换器</div>
+                <div class="panel-note">先选 App，再切换该 App 下的会话</div>
+              </div>
+              <span class="badge done">12 会话</span>
+            </div>
+            <div class="session-body">
+              <div class="session-tabs" aria-label="App 会话来源">
+                <div class="session-tab active">
+                  <strong><span class="dot codex"></span>Codex</strong>
+                  <span>4 个活跃会话</span>
+                </div>
+                <div class="session-tab">
+                  <strong><span class="dot claude"></span>Claude</strong>
+                  <span>5 个活跃会话</span>
+                </div>
+                <div class="session-tab">
+                  <strong><span class="dot antigravity"></span>Antigravity</strong>
+                  <span>3 个活跃会话</span>
+                </div>
+              </div>
+
+              <div class="session-list">
+                <div class="session-item active">
+                  <div>
+                    <div class="session-name"><span class="dot codex"></span>auth-refresh · Codex #C-184</div>
+                    <div class="session-meta">~/work/app-auth · 正在修复登录态刷新失败</div>
+                  </div>
+                  <div class="session-stat"><strong>428K</strong><span>18m</span></div>
+                </div>
+                <div class="session-item">
+                  <div>
+                    <div class="session-name"><span class="dot claude"></span>analytics-sql · Claude #CL-77</div>
+                    <div class="session-meta">remote: analytics-prod · 已完成，保留上下文</div>
+                  </div>
+                  <div class="session-stat"><strong>186K</strong><span>9m</span></div>
+                </div>
+                <div class="session-item">
+                  <div>
+                    <div class="session-name"><span class="dot antigravity"></span>collector-tests · Antigravity #AG-12</div>
+                    <div class="session-meta">~/agent-monitor · 测试重构进行中</div>
+                  </div>
+                  <div class="session-stat"><strong>92K</strong><span>6m</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card control-card">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">统一交互控制台</div>
+                <div class="panel-note">向当前 App 会话发送指令</div>
+              </div>
+              <span class="badge running">可用</span>
+            </div>
+            <div class="control-body">
+              <div class="cli-switcher" aria-label="App 选择">
+                <div class="cli-option active">
+                  <strong><span class="dot codex"></span>Codex</strong>
+                  <span>#C-184 · gpt-5-codex</span>
+                </div>
+                <div class="cli-option">
+                  <strong><span class="dot claude"></span>Claude</strong>
+                  <span>#CL-77 · opus/sonnet</span>
+                </div>
+                <div class="cli-option">
+                  <strong><span class="dot antigravity"></span>Antigravity</strong>
+                  <span>#AG-12 · app session</span>
+                </div>
+              </div>
+
+              <div class="context-row">
+                <div>
+                  <div class="context-label">当前会话上下文</div>
+                  <div class="context-value">Codex #C-184 · ~/work/app-auth · 修复登录态刷新失败</div>
+                </div>
+                <button class="ghost-button">换会话</button>
+              </div>
+
+              <div class="prompt-box">
+                <div class="prompt-toolbar">
+                  <span>Prompt · Codex #C-184</span>
+                  <span>预计 42K token</span>
+                </div>
+                <div class="prompt-input">
+                  继续当前任务，先说明失败原因，再只修改必要文件；完成后运行相关测试。<span class="caret"></span>
+                </div>
+              </div>
+
+              <div class="control-actions">
+                <button class="send-button">发送指令</button>
+                <button class="ghost-button">继续</button>
+                <button class="danger-button">停止</button>
+              </div>
+
+              <div class="template-row">
+                <span class="template-chip">解释当前任务</span>
+                <span class="template-chip">补测试</span>
+                <span class="template-chip">生成 PR 摘要</span>
+                <span class="template-chip">切到只读模式</span>
+              </div>
+
+              <div class="permission-strip">
+                <span>!</span>
+                <span>涉及写文件、执行命令、访问网络或发送外部消息时，在控制台内显示二次确认。</span>
+              </div>
+
+              <div class="terminal-preview">
+                <div class="terminal-head">
+                  <span>codex #C-184 · live terminal</span>
+                  <span>18m · 428K token</span>
+                </div>
+                <div class="terminal-body">
+                  <div class="terminal-line"><strong>$</strong> codex resume task-auth-refresh</div>
+                  <div class="terminal-line">planning minimal patch for refresh handler...</div>
+                  <div class="terminal-line">waiting for user instruction in dashboard</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </aside>
+      </div>
+
+      <section class="ops-grid">
+        <div class="card connector-card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">App 连接器</div>
+              <div class="panel-note">会话数、任务数、额度、日志采集状态</div>
+            </div>
+          </div>
+          <div class="connector-row">
+            <div class="logo codex">CX</div>
+            <div>
+              <div class="connector-title">Codex <span class="badge running">采集中</span></div>
+              <div class="connector-meta">4 个会话 · 今日 1.31M token</div>
+            </div>
+            <div class="connector-stat"><strong>8</strong><span>任务</span></div>
+          </div>
+          <div class="connector-row">
+            <div class="logo claude">CL</div>
+            <div>
+              <div class="connector-title">Claude <span class="badge running">采集中</span></div>
+              <div class="connector-meta">5 个会话 · API Key 按量 · 成本 ¥42</div>
+            </div>
+            <div class="connector-stat"><strong>7</strong><span>任务</span></div>
+          </div>
+          <div class="connector-row">
+            <div class="logo antigravity">AG</div>
+            <div>
+              <div class="connector-title">Antigravity <span class="badge done">正常</span></div>
+              <div class="connector-meta">3 个会话 · 今日 550K token</div>
+            </div>
+            <div class="connector-stat"><strong>5</strong><span>任务</span></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">Token 计数</div>
+              <div class="panel-note">日 / 周 / 月可切换</div>
+            </div>
+          </div>
+          <div class="token-list">
+            <div class="token-row">
+              <div>
+                <div class="quota-name"><span class="dot codex"></span>Codex</div>
+                <div class="token-breakdown">输入 920K · 输出 390K</div>
+              </div>
+              <div class="token-total">1.31M<span>tokens</span></div>
+            </div>
+            <div class="token-row">
+              <div>
+                <div class="quota-name"><span class="dot claude"></span>Claude</div>
+                <div class="token-breakdown">输入 710K · 输出 270K</div>
+              </div>
+              <div class="token-total">980K<span>tokens</span></div>
+            </div>
+            <div class="token-row">
+              <div>
+                <div class="quota-name"><span class="dot antigravity"></span>Antigravity</div>
+                <div class="token-breakdown">输入 420K · 输出 130K</div>
+              </div>
+              <div class="token-total">550K<span>tokens</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">计费模式</div>
+              <div class="panel-note">用于解释成本口径</div>
+            </div>
+          </div>
+          <div class="billing-list">
+            <div class="billing-item">
+              <div>
+                <div class="billing-title">订阅席位覆盖</div>
+                <div class="billing-desc">固定席位或套餐内额度，成本按席位分摊。</div>
+              </div>
+              <div class="billing-cost">¥84</div>
+            </div>
+            <div class="billing-item">
+              <div>
+                <div class="billing-title">API Key 按量</div>
+                <div class="billing-desc">按模型、输入、输出 token 分别计价。</div>
+              </div>
+              <div class="billing-cost">¥42</div>
+            </div>
+            <div class="billing-item">
+              <div>
+                <div class="billing-title">App 内置额度</div>
+                <div class="billing-desc">展示 Antigravity 等 App 会话额度与转按量风险。</div>
+              </div>
+              <div class="billing-cost">¥0</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card risk">
+          <div>
+            <div class="panel-title">风险提示</div>
+            <div class="panel-note">费用与运行稳定性</div>
+          </div>
+          <div class="risk-number">1</div>
+          <div class="risk-copy">Codex 今日用量 1.31M token，若保持当前速度，约 3 小时后超过 2M 提醒阈值。</div>
+          <span class="badge warn">建议关注</span>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
