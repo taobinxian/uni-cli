@@ -4,17 +4,20 @@ import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import type { Adapter, AdapterDeps } from './base.js';
-import { executable, exists, listFilesRecursive, readJsonlTail } from './fs-utils.js';
+import { requireCommand, resolveCommand } from './command-discovery.js';
+import { exists, listFilesRecursive, readJsonlTail } from './fs-utils.js';
 import { compactHistoryFrames, historyFrame, textFromContent } from './history.js';
 import { parseJsonLine } from '../../shared/parsers.js';
-import type { AdapterStatus, DeleteSessionLogsResult, Session, StartSessionInput, TerminalFrame, TimeScope, TokenUsage } from '../../shared/types.js';
+import type { AdapterStatus, DeleteSessionLogsResult, Session, StartSessionInput, TaskStatus, TerminalFrame, TimeScope, TokenUsage } from '../../shared/types.js';
+
+const CODEX_STALE_LIVE_MS = 30 * 60 * 1000;
 
 export class CodexAdapter implements Adapter {
   appId = 'codex' as const;
   label = 'Codex';
   color = '#0d8a72';
   defaultModel = 'gpt-5-codex';
-  private command = process.env.CODEX_CMD ?? '/opt/homebrew/bin/codex';
+  private commandHint = process.env.CODEX_CMD ?? 'codex';
   private launcher: AdapterDeps['launcher'];
 
   constructor(deps: AdapterDeps) {
@@ -22,14 +25,14 @@ export class CodexAdapter implements Adapter {
   }
 
   async detect(): Promise<AdapterStatus> {
-    const ok = await executable(this.command);
+    const command = await resolveCommand({ envVar: 'CODEX_CMD', names: ['codex'] });
     const sessions = await this.listSessions();
     return {
       appId: this.appId,
       label: this.label,
-      command: this.command,
-      status: ok ? 'connected' : 'missing',
-      message: ok ? 'Codex CLI 可用' : '未找到 Codex CLI',
+      command: command ?? this.commandHint,
+      status: command ? 'connected' : 'missing',
+      message: command ? 'Codex CLI 可用' : '未找到 Codex CLI，可设置 CODEX_CMD 或将 codex 加入 PATH',
       sessions: sessions.length,
       tasks: sessions.length
     };
@@ -40,6 +43,7 @@ export class CodexAdapter implements Adapter {
   }
 
   async startSession(input: StartSessionInput, sessionId = `codex-${randomUUID()}`): Promise<Session> {
+    const command = await requireCommand({ envVar: 'CODEX_CMD', names: ['codex'] }, this.label);
     const timestamp = new Date().toISOString();
     const session: Session = {
       id: sessionId,
@@ -58,7 +62,7 @@ export class CodexAdapter implements Adapter {
     await this.launcher.launch({
       appId: this.appId,
       sessionId,
-      command: this.command,
+      command,
       args: input.prompt ? codexExecArgs(input.prompt) : [],
       pty: !input.prompt,
       stdin: input.prompt ? 'ignore' : 'pipe',
@@ -69,21 +73,23 @@ export class CodexAdapter implements Adapter {
 
   async resumeSession(session: Session): Promise<void> {
     if (this.launcher.has(session.id)) return;
+    const command = await requireCommand({ envVar: 'CODEX_CMD', names: ['codex'] }, this.label);
     await this.launcher.launch({
       appId: this.appId,
       sessionId: session.id,
-      command: this.command,
+      command,
       args: session.nativeId ? ['resume', session.nativeId] : ['resume', '--last'],
       cwd: session.cwd
     });
   }
 
   async sendPrompt(session: Session, prompt: string): Promise<void> {
+    const command = await requireCommand({ envVar: 'CODEX_CMD', names: ['codex'] }, this.label);
     this.launcher.stop(session.id);
     await this.launcher.launch({
       appId: this.appId,
       sessionId: session.id,
-      command: this.command,
+      command,
       args: session.nativeId ? codexExecResumeArgs(session.nativeId, prompt) : codexExecArgs(prompt),
       cwd: session.cwd,
       pty: false,
@@ -211,6 +217,8 @@ export class CodexAdapter implements Adapter {
     let createdAt = '';
     let updatedAt = '';
     let usage = { inputTokens: 0, outputTokens: 0 };
+    let status: TaskStatus = 'completed';
+    let live = false;
 
     const content = await readFile(path, 'utf8');
     for (const line of content.split('\n')) {
@@ -233,26 +241,37 @@ export class CodexAdapter implements Adapter {
       if (!firstUser) firstUser = extractCodexUserText(payload);
       const tokenUsage = codexTokenUsage(payload);
       if (tokenUsage.inputTokens + tokenUsage.outputTokens > 0) usage = tokenUsage;
+      const lifecycle = codexLifecycleState(payload);
+      if (lifecycle) {
+        status = lifecycle.status;
+        live = lifecycle.live;
+      }
     }
 
     if (!id) return undefined;
     const sqliteUsage = logUsage.get(id);
     if (sqliteUsage && usage.inputTokens + usage.outputTokens === 0) usage = sqliteUsage;
     const title = titles.get(id) ?? cleanTitle(firstUser) ?? basename(id);
+    const createdIso = validIso(createdAt) ?? mtime.toISOString();
+    const updatedIso = validIso(updatedAt) ?? mtime.toISOString();
+    if (live && Date.now() - Date.parse(updatedIso) > CODEX_STALE_LIVE_MS) {
+      status = 'completed';
+      live = false;
+    }
     return {
       id,
       appId: this.appId,
       nativeId: id,
       title,
       cwd,
-      status: 'completed',
+      status,
       model: model ?? this.defaultModel,
-      createdAt: validIso(createdAt) ?? mtime.toISOString(),
-      updatedAt: validIso(updatedAt) ?? mtime.toISOString(),
+      createdAt: createdIso,
+      updatedAt: updatedIso,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       totalTokens: usage.inputTokens + usage.outputTokens,
-      live: false
+      live
     };
   }
 }
@@ -273,6 +292,16 @@ function codexTokenUsage(payload: Record<string, unknown>): { inputTokens: numbe
     inputTokens: safeToken(total?.input_tokens),
     outputTokens: safeToken(total?.output_tokens)
   };
+}
+
+function codexLifecycleState(payload: Record<string, unknown>): { status: TaskStatus; live: boolean } | undefined {
+  const type = String(payload.type ?? '');
+  if (type === 'task_started') return { status: 'running', live: true };
+  if (type === 'task_complete') return { status: 'completed', live: false };
+  if (type === 'turn_aborted' || type === 'task_failed' || type === 'task_cancelled' || type === 'task_interrupted') {
+    return { status: 'interrupted', live: false };
+  }
+  return undefined;
 }
 
 function extractCodexUserText(payload: Record<string, unknown>): string {

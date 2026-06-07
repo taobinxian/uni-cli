@@ -1,10 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 
-test('dashboard shows token counts without token percentages', async ({ page }) => {
+test('focus console shows token counts without token percentages', async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('.topbar h1')).toHaveText('AI Coding App 整合工作台');
+  await expect(page.getByTestId('focus-console')).toBeVisible();
+  await expect(page.getByText('Focus Console')).toBeVisible();
   const tokenCard = page.getByTestId('token-count-card');
   await expect(tokenCard).toBeVisible();
+  await expect(tokenCard).toContainText('TOKEN');
+  await tokenCard.getByRole('button').first().click();
   await expect(tokenCard).toContainText('Codex');
   await expect(tokenCard).toContainText('Claude');
   await expect(tokenCard).toContainText('Antigravity');
@@ -13,61 +16,33 @@ test('dashboard shows token counts without token percentages', async ({ page }) 
   await expect(page.getByText('73%')).toHaveCount(0);
 });
 
-test('sidebar navigation opens independent pages', async ({ page }) => {
-  test.skip(test.info().project.name === 'mobile', 'sidebar is hidden on mobile');
-
+test('focus sidebar app sources switch the active workbench', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'AI Coding App 整合工作台' })).toBeVisible();
+  await expect(page.getByTestId('focus-console')).toBeVisible();
   await expect(page.getByTestId('task-table')).toHaveCount(0);
   await expect(page.getByTestId('nav-running')).toHaveCount(0);
   await expect(page.getByTestId('nav-completed')).toHaveCount(0);
 
   await page.getByTestId('nav-codex').click();
   await expect(page).toHaveURL(/#codex$/);
-  await expect(page.locator('.topbar h1')).toHaveText('Codex 工作台');
-  await expect(page.getByTestId('app-summary')).toContainText('Codex');
   await expect(page.getByTestId('session-switcher')).toBeVisible();
-  await expect(page.getByTestId('task-table')).toHaveCount(0);
+  await expect(page.getByTestId('control-panel')).toContainText('Codex');
 
-  await page.getByTestId('nav-sessions').click();
-  await expect(page).toHaveURL(/#sessions$/);
-  await expect(page.locator('.topbar h1')).toHaveText('会话切换');
-  await expect(page.getByTestId('session-switcher')).toBeVisible();
-  await expect(page.getByTestId('control-panel')).toBeVisible();
-
-  await page.getByTestId('nav-overview').click();
-  await expect(page).toHaveURL(/#overview$/);
-  await expect(page.locator('.topbar h1')).toHaveText('AI Coding App 整合工作台');
-  await expect(page.getByTestId('task-table')).toHaveCount(0);
-});
-
-test('top and panel controls perform real actions', async ({ page }) => {
-  await page.goto('/#sessions');
-
-  await page.getByTestId('control-app-claude').click();
+  await page.getByTestId('nav-claude').click();
   await expect(page).toHaveURL(/#claude$/);
-  await expect(page.locator('.topbar h1')).toHaveText('Claude 工作台');
-  await expect(page.getByTestId('app-summary')).toContainText('Claude');
-  await expect(page.getByTestId('session-switcher')).toBeVisible();
   await expect(page.getByTestId('control-panel')).toContainText('Claude');
 
-  await page.getByTestId('control-app-codex').click();
-  await expect(page).toHaveURL(/#codex$/);
-  await expect(page.locator('.topbar h1')).toHaveText('Codex 工作台');
-  await expect(page.getByTestId('app-summary')).toContainText('Codex');
-  await expect(page.getByTestId('session-switcher')).toBeVisible();
-
-  await page.goto('/');
-  await page.getByTestId('connector-antigravity').click();
+  await page.getByTestId('nav-antigravity').click();
   await expect(page).toHaveURL(/#antigravity$/);
-  await expect(page.getByTestId('app-summary')).toContainText('Antigravity');
-  await expect(page.getByTestId('session-switcher')).toBeVisible();
-  await expect(page.getByTestId('task-table')).toHaveCount(0);
+  await expect(page.getByTestId('control-panel')).toContainText('Antigravity');
+});
+
+test('focus console controls export real report', async ({ page }) => {
+  test.skip(test.info().project.name === 'mobile', 'export is in the desktop inspector panel');
 
   await page.goto('/');
-  await page.getByTestId('risk-action').click();
-  await expect(page.locator('.topbar h1')).toBeVisible();
-
+  await expect(page.getByTestId('control-panel')).toBeVisible();
+  await expect(page.getByPlaceholder(/向当前会话发送指令/)).toBeVisible();
   const downloadPromise = page.waitForEvent('download');
   await page.getByTestId('export-report').click();
   const download = await downloadPromise;
@@ -85,62 +60,43 @@ test('session switcher rows select historical sessions for continuation', async 
 
   const row = await openSessionInSwitcher(page, target);
   await expect(row).toHaveClass(/active/);
-  await expect(row).toContainText('耗时');
+  await expect(row).toContainText(target.id.slice(-6));
   await expect(row.locator('.status')).toBeVisible();
   await expect(page.getByTestId('control-panel')).toContainText(appLabel(target.appId));
   await expect(page.getByTestId('control-panel')).toContainText(target.id.slice(-6));
   await expect(page.getByTestId('control-panel').getByRole('button', { name: '继续' })).toBeEnabled();
 });
 
-test('session switcher paginates sessions twenty per page', async ({ page }) => {
+test('session switcher reveals additional sessions per app', async ({ page }) => {
   const response = await page.request.get('/api/sessions');
   const sessions = (await response.json()) as Array<{ id: string; appId: string }>;
   const grouped = appIds
     .map((appId) => ({ appId, sessions: sessions.filter((session) => session.appId === appId) }))
-    .find((group) => group.sessions.length > 20);
+    .find((group) => group.sessions.length > 6);
   if (!grouped) {
-    test.skip(true, 'no app has more than 20 sessions on this machine');
+    test.skip(true, 'no app has more than 6 sessions on this machine');
     return;
   }
 
   await page.goto(`/#${grouped.appId}`);
-  await expect(page.getByTestId('session-switcher')).toContainText('20 条/页');
-  await expect(page.locator('[data-testid^="session-row-"]')).toHaveCount(20);
-  await page.getByRole('button', { name: '下一页' }).click();
-  await expect(page.getByTestId(`session-row-${grouped.sessions[20].id}`)).toBeVisible();
+  await expect(page.getByTestId('session-switcher')).toContainText('显示其余');
+  await page.getByRole('button', { name: /显示其余/ }).first().click();
+  await expect(page.getByTestId(`session-row-${grouped.sessions[6].id}`)).toBeVisible();
 });
 
-test('session switcher and control panel workspace can be resized by dragging', async ({ page }) => {
-  test.skip(test.info().project.name === 'mobile', 'workspace split is stacked on mobile');
+test('focus console uses source list, workbench, and inspector columns', async ({ page }) => {
+  test.skip(test.info().project.name === 'mobile', 'mobile stacks the focus console');
 
-  await page.addInitScript(() => {
-    window.localStorage.removeItem('ai-workbench.workspace-split.v1');
-  });
-  await page.goto('/#sessions');
-
+  await page.goto('/');
   const sessionSwitcher = page.getByTestId('session-switcher');
   const controlPanel = page.getByTestId('control-panel');
-  const resizer = page.getByTestId('workspace-resizer');
   await expect(sessionSwitcher).toBeVisible();
   await expect(controlPanel).toBeVisible();
-  await expect(resizer).toBeVisible();
+  await expect(page.locator('.focus-inspector')).toBeVisible();
 
-  const beforeSessionWidth = await sessionSwitcher.evaluate((element) => element.getBoundingClientRect().width);
-  const beforeControlWidth = await controlPanel.evaluate((element) => element.getBoundingClientRect().width);
-
-  const box = await resizer.boundingBox();
-  expect(box).not.toBeNull();
-  await page.mouse.move(box!.x + box!.width / 2, box!.y + 120);
-  await page.mouse.down();
-  await page.mouse.move(box!.x + box!.width / 2 + 160, box!.y + 120, { steps: 5 });
-  await page.mouse.up();
-
-  await expect
-    .poll(() => sessionSwitcher.evaluate((element) => element.getBoundingClientRect().width))
-    .toBeGreaterThan(beforeSessionWidth + 60);
-  await expect
-    .poll(() => controlPanel.evaluate((element) => element.getBoundingClientRect().width))
-    .toBeLessThan(beforeControlWidth - 60);
+  const sidebarWidth = await sessionSwitcher.evaluate((element) => element.closest('.focus-sidebar')!.getBoundingClientRect().width);
+  const workbenchWidth = await controlPanel.evaluate((element) => element.getBoundingClientRect().width);
+  expect(sidebarWidth).toBeLessThan(workbenchWidth);
 });
 
 test('selected historical session loads transcript content', async ({ page }) => {

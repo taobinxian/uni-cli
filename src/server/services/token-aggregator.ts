@@ -1,8 +1,6 @@
-import type { AppId, Session, TimeScope, TokenUsage, UsagePoint } from '../../shared/types.js';
+import { APP_ORDER, type AppId, type Session, type TimeScope, type TokenUsage, type UsagePoint } from '../../shared/types.js';
 import { aggregateTokenUsage, scopeStart } from '../../shared/token.js';
 import { Store } from '../db.js';
-
-const APP_ORDER: AppId[] = ['codex', 'claude', 'antigravity'];
 
 export class TokenAggregator {
   private store: Store;
@@ -80,16 +78,11 @@ function bucketsFor(scope: TimeScope, start: Date, reference: Date): Array<{ lab
 }
 
 function pointFor(label: string, sessions: Session[], end: Date): UsagePoint {
-  const totals: Record<AppId, number> = { codex: 0, claude: 0, antigravity: 0 };
+  const totals = Object.fromEntries(APP_ORDER.map((appId) => [appId, 0])) as Record<AppId, number>;
   for (const session of sessions) {
     if (Date.parse(session.updatedAt) <= end.getTime()) totals[session.appId] += session.totalTokens;
   }
-  return {
-    label,
-    codex: totals.codex,
-    claude: totals.claude,
-    antigravity: totals.antigravity
-  };
+  return { label, ...totals };
 }
 
 function clamp(date: Date, max: Date): Date {
@@ -97,5 +90,5 @@ function clamp(date: Date, max: Date): Date {
 }
 
 export function appOrder(): AppId[] {
-  return APP_ORDER;
+  return [...APP_ORDER];
 }

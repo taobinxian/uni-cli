@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Adapter, AdapterDeps } from './base.js';
-import { executable, listFiles, listFilesRecursive } from './fs-utils.js';
+import { requireCommand, resolveCommand } from './command-discovery.js';
+import { listFiles, listFilesRecursive } from './fs-utils.js';
 import { compactHistoryFrames, historyFrame, textFromContent } from './history.js';
 import { extractUsage, parseJsonLine } from '../../shared/parsers.js';
 import type { AdapterStatus, DeleteSessionLogsResult, Session, StartSessionInput, TerminalFrame, TimeScope, TokenUsage } from '../../shared/types.js';
@@ -13,7 +14,7 @@ export class ClaudeAdapter implements Adapter {
   label = 'Claude';
   color = '#bd5b2f';
   defaultModel = 'opus/sonnet';
-  private command = process.env.CLAUDE_CMD ?? '/opt/homebrew/bin/claude';
+  private commandHint = process.env.CLAUDE_CMD ?? 'claude';
   private launcher: AdapterDeps['launcher'];
 
   constructor(deps: AdapterDeps) {
@@ -21,14 +22,14 @@ export class ClaudeAdapter implements Adapter {
   }
 
   async detect(): Promise<AdapterStatus> {
-    const ok = await executable(this.command);
+    const command = await resolveCommand({ envVar: 'CLAUDE_CMD', names: ['claude'] });
     const sessions = await this.listSessions();
     return {
       appId: this.appId,
       label: this.label,
-      command: this.command,
-      status: ok ? 'connected' : 'missing',
-      message: ok ? 'Claude CLI 可用' : '未找到 Claude CLI',
+      command: command ?? this.commandHint,
+      status: command ? 'connected' : 'missing',
+      message: command ? 'Claude CLI 可用' : '未找到 Claude CLI，可设置 CLAUDE_CMD 或将 claude 加入 PATH',
       sessions: sessions.length,
       tasks: sessions.length
     };
@@ -39,50 +40,56 @@ export class ClaudeAdapter implements Adapter {
   }
 
   async startSession(input: StartSessionInput, sessionId = `claude-${randomUUID()}`): Promise<Session> {
+    const command = await requireCommand({ envVar: 'CLAUDE_CMD', names: ['claude'] }, this.label);
     const timestamp = new Date().toISOString();
+    const hasPrompt = Boolean(input.prompt?.trim());
     const session: Session = {
       id: sessionId,
       appId: this.appId,
       title: input.title ?? input.prompt?.slice(0, 48) ?? 'Claude session',
       cwd: input.cwd,
-      status: 'running',
+      status: hasPrompt ? 'running' : 'pending',
       model: this.defaultModel,
       createdAt: timestamp,
       updatedAt: timestamp,
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
-      live: true
+      live: hasPrompt
     };
-    await this.launcher.launch({
-      appId: this.appId,
-      sessionId,
-      command: this.command,
-      args: input.prompt ? claudePrintArgs(input.prompt) : [],
-      pty: !input.prompt,
-      stdin: input.prompt ? 'ignore' : 'pipe',
-      cwd: input.cwd
-    });
+    if (hasPrompt) {
+      await this.launcher.launch({
+        appId: this.appId,
+        sessionId,
+        command,
+        args: claudePrintArgs(input.prompt!),
+        pty: false,
+        stdin: 'ignore',
+        cwd: input.cwd
+      });
+    }
     return session;
   }
 
   async resumeSession(session: Session): Promise<void> {
     if (this.launcher.has(session.id)) return;
+    const command = await requireCommand({ envVar: 'CLAUDE_CMD', names: ['claude'] }, this.label);
     await this.launcher.launch({
       appId: this.appId,
       sessionId: session.id,
-      command: this.command,
+      command,
       args: session.nativeId ? ['--resume', session.nativeId] : ['--continue'],
       cwd: session.cwd
     });
   }
 
   async sendPrompt(session: Session, prompt: string): Promise<void> {
+    const command = await requireCommand({ envVar: 'CLAUDE_CMD', names: ['claude'] }, this.label);
     this.launcher.stop(session.id);
     await this.launcher.launch({
       appId: this.appId,
       sessionId: session.id,
-      command: this.command,
+      command,
       args: session.nativeId ? claudePrintArgs(prompt, ['--resume', session.nativeId]) : claudePrintArgs(prompt),
       cwd: session.cwd,
       pty: false,
@@ -150,7 +157,14 @@ export class ClaudeAdapter implements Adapter {
     for (const file of files) {
       if (basename(file.path, '.jsonl') === id) return file.path;
       const content = await readFile(file.path, 'utf8');
-      if (content.includes(`"sessionId":"${id}"`) || content.includes(`"sessionId": "${id}"`)) return file.path;
+      if (
+        content.includes(`"sessionId":"${id}"`) ||
+        content.includes(`"sessionId": "${id}"`) ||
+        content.includes(`"session_id":"${id}"`) ||
+        content.includes(`"session_id": "${id}"`)
+      ) {
+        return file.path;
+      }
     }
     return undefined;
   }
@@ -170,6 +184,7 @@ export class ClaudeAdapter implements Adapter {
       const row = parseJsonLine(line) as Record<string, unknown> | undefined;
       if (!row) continue;
       if (typeof row.sessionId === 'string') id = row.sessionId;
+      if (typeof row.session_id === 'string') id = row.session_id;
       if (typeof row.cwd === 'string') cwd = row.cwd;
       const timestamp = typeof row.timestamp === 'string' ? row.timestamp : undefined;
       if (timestamp) {
@@ -260,5 +275,5 @@ function safeToken(value: unknown): number {
 }
 
 function claudePrintArgs(prompt: string, resumeArgs: string[] = []): string[] {
-  return ['--print', '--output-format', 'stream-json', '--include-partial-messages', ...resumeArgs, prompt];
+  return ['--print', '--verbose', '--output-format', 'stream-json', '--include-partial-messages', ...resumeArgs, prompt];
 }

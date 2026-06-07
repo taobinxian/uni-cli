@@ -37,8 +37,7 @@ export function cleanHistoryText(text: string): string {
     .split('\n')
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean)
-    .join('\n')
-    .slice(0, 6000);
+    .join('\n');
 }
 
 function textFromContentInner(value: unknown, depth: number): string {
@@ -54,11 +53,49 @@ function textFromContentInner(value: unknown, depth: number): string {
   if (typeof value !== 'object') return '';
 
   const record = value as Record<string, unknown>;
+  const image = imageMarkdownFromRecord(record);
+  if (image) return image;
   for (const key of ['text', 'content', 'message', 'input', 'output', 'result', 'summary']) {
     const text = textFromContentInner(record[key], depth + 1);
     if (text) return text;
   }
   return '';
+}
+
+function imageMarkdownFromRecord(record: Record<string, unknown>): string {
+  const imageValue =
+    firstString(record.image, record.image_url, record.imageUrl, record.image_path, record.imagePath, record.file_path, record.filePath, record.path, record.url) ||
+    imageFromSource(record.source);
+  if (!imageValue || !looksLikeImageReference(imageValue)) return '';
+  const label = firstString(record.name, record.filename, record.file_name, record.title) || 'image';
+  return `![${escapeMarkdownAlt(label)}](${imageValue})`;
+}
+
+function imageFromSource(source: unknown): string {
+  if (!source || typeof source !== 'object') return '';
+  const record = source as Record<string, unknown>;
+  const direct = firstString(record.url, record.uri, record.path, record.file_path, record.filePath);
+  if (direct) return direct;
+
+  const mediaType = firstString(record.media_type, record.mediaType, record.mime_type, record.mimeType);
+  const data = firstString(record.data);
+  if (mediaType?.startsWith('image/') && data) return `data:${mediaType};base64,${data}`;
+  return '';
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function looksLikeImageReference(value: string): boolean {
+  return /^data:image\//i.test(value) || /^https?:\/\/.+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#].*)?$/i.test(value) || /\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#].*)?$/i.test(value);
+}
+
+function escapeMarkdownAlt(value: string): string {
+  return value.replace(/[\[\]\n\r]/g, ' ').trim() || 'image';
 }
 
 function validHistoryIso(value?: string): string | undefined {

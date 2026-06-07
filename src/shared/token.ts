@@ -1,14 +1,12 @@
-import type { AppId, TimeScope, TokenUsage } from './types.js';
+import { APP_ORDER, type AppId, type TimeScope, type TokenUsage } from './types.js';
 
 export function aggregateTokenUsage(
   rows: Array<{ appId: AppId; inputTokens: number; outputTokens: number }>,
   scope: TimeScope
 ): TokenUsage[] {
-  const empty: Record<AppId, TokenUsage> = {
-    codex: { appId: 'codex', scope, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    claude: { appId: 'claude', scope, inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-    antigravity: { appId: 'antigravity', scope, inputTokens: 0, outputTokens: 0, totalTokens: 0 }
-  };
+  const empty = Object.fromEntries(
+    APP_ORDER.map((appId) => [appId, { appId, scope, inputTokens: 0, outputTokens: 0, totalTokens: 0 }])
+  ) as Record<AppId, TokenUsage>;
 
   for (const row of rows) {
     const target = empty[row.appId];

@@ -92,7 +92,7 @@ setInterval(() => {}, 500);
     expect(firstHistoryPage.hasMore).toBe(true);
     expect(firstHistoryPage.nextCursor).toBe(1);
 
-    const session = await post<Session>('/api/sessions', { appId: 'codex', prompt: 'initial fake prompt' }, 201);
+    const session = await post<Session>('/api/sessions', { appId: 'codex', cwd: process.cwd(), prompt: 'initial fake prompt' }, 201);
     const terminalOutput = waitForSseMessage<TerminalFrame>(
       `${baseUrl}/sse/sessions/${session.id}`,
       (frame) => frame.sessionId === session.id && frame.text.includes('hello fake cli')
@@ -131,7 +131,7 @@ setInterval(() => {}, 500);
     expect(stopped.some((task) => task.sessionId === session.id)).toBe(true);
 
     for (const appId of ['claude', 'antigravity'] as AppId[]) {
-      const extraSession = await post<Session>('/api/sessions', { appId, prompt: `start ${appId}` }, 201);
+      const extraSession = await post<Session>('/api/sessions', { appId, cwd: process.cwd(), prompt: `start ${appId}` }, 201);
       expect(extraSession.appId).toBe(appId);
       await post(`/api/sessions/${extraSession.id}/stop`);
       const extraStopped = await get<Task[]>(`/api/tasks?appId=${appId}&status=stopped`);
@@ -149,12 +149,11 @@ setInterval(() => {}, 500);
     const secondDelete = await fetch(`${baseUrl}/api/sessions/${codexHistoryId}`, { method: 'DELETE' });
     expect(secondDelete.status).toBe(404);
 
-    const deleteTarget = await post<Session>('/api/sessions', { appId: 'codex', prompt: 'delete fake session' }, 201);
+    const deleteTarget = await post<Session>('/api/sessions', { appId: 'codex', cwd: process.cwd(), prompt: 'delete fake session' }, 201);
     await post(`/api/sessions/${deleteTarget.id}/stop`);
-    const missingSourceDelete = await fetch(`${baseUrl}/api/sessions/${deleteTarget.id}`, { method: 'DELETE' });
-    expect(missingSourceDelete.status).toBe(409);
-    const missingSourceBody = (await missingSourceDelete.json()) as { error: string };
-    expect(missingSourceBody.error).toContain('没有找到对应的 CLI 原始日志文件');
+    const missingSourceDelete = await del<DeleteSessionResult>(`/api/sessions/${deleteTarget.id}`);
+    expect(missingSourceDelete.session.id).toBe(deleteTarget.id);
+    expect(missingSourceDelete.skippedFiles.some((item) => item.includes('no-source-log'))).toBe(true);
 
     terminalOutput.close();
     terminalEvent.close();

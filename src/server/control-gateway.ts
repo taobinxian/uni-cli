@@ -1,4 +1,4 @@
-import type { PromptInput, StartSessionInput } from '../shared/types.js';
+import type { AppId, PromptInput, StartSessionInput } from '../shared/types.js';
 import { SessionManager } from './services/session-manager.js';
 
 export class ControlGateway {
@@ -38,5 +38,9 @@ export class ControlGateway {
 
   rejectConfirmation(id: string) {
     return this.sessions.resolveConfirmation(id, 'rejected');
+  }
+
+  refreshHistoricalSessions(appId?: AppId) {
+    return this.sessions.refreshHistoricalSessions(appId);
   }
 }
