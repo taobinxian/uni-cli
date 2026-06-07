@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
-import { extname, isAbsolute, resolve } from 'node:path';
+import { readdir, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { AppId, PromptInput, StartSessionInput, TaskStatus, TimeScope } from '../shared/types.js';
 import { Store } from './db.js';
@@ -18,7 +19,7 @@ export async function registerRoutes(
 
   fastify.get('/api/assets/image', async (request, reply) => {
     const query = request.query as { path?: string; cwd?: string };
-    const filePath = resolveAssetPath(query.path, query.cwd);
+    const filePath = await resolveAssetPath(query.path, query.cwd);
     if (!filePath) return reply.code(400).send({ error: 'Image path is required' });
 
     const mimeType = imageMimeType(filePath);
@@ -37,6 +38,7 @@ export async function registerRoutes(
   });
 
   fastify.get('/api/dashboard', async () => {
+    await control.refreshHistoricalSessions();
     const tokenSnapshot = tokens.get('day');
     return {
       apps: store.listApps(),
@@ -53,11 +55,13 @@ export async function registerRoutes(
 
   fastify.get('/api/sessions', async (request) => {
     const query = request.query as { appId?: AppId };
+    await control.refreshHistoricalSessions(query.appId);
     return store.listSessions(query.appId);
   });
 
   fastify.get('/api/tasks', async (request) => {
     const query = request.query as { appId?: AppId; status?: TaskStatus };
+    await control.refreshHistoricalSessions(query.appId);
     return store.listTasks({ appId: query.appId, status: query.status });
   });
 
@@ -72,7 +76,9 @@ export async function registerRoutes(
 
   fastify.post('/api/sessions', async (request, reply) => {
     const body = request.body as StartSessionInput;
-    const session = await control.startSession(body);
+    const cwd = await validateSessionCwd(body.cwd, reply);
+    if (!cwd) return;
+    const session = await control.startSession({ ...body, cwd });
     return reply.code(201).send(session);
   });
 
@@ -128,17 +134,60 @@ export async function registerRoutes(
   });
 }
 
-function resolveAssetPath(rawPath?: string, cwd?: string): string | undefined {
+async function validateSessionCwd(rawCwd: string | undefined, reply: { code(statusCode: number): { send(payload: unknown): unknown } }): Promise<string | undefined> {
+  const cwd = expandHomePath(rawCwd?.trim() ?? '');
+  if (!cwd) {
+    reply.code(400).send({ error: '请选择工作目录' });
+    return undefined;
+  }
+  if (!isAbsolute(cwd)) {
+    reply.code(400).send({ error: '工作目录必须是绝对路径' });
+    return undefined;
+  }
+  try {
+    const info = await stat(cwd);
+    if (!info.isDirectory()) {
+      reply.code(400).send({ error: '工作目录不是文件夹' });
+      return undefined;
+    }
+  } catch {
+    reply.code(400).send({ error: '工作目录不存在或不可访问' });
+    return undefined;
+  }
+  return cwd;
+}
+
+function expandHomePath(pathName: string): string {
+  if (pathName === '~') return homedir();
+  if (pathName.startsWith('~/')) return join(homedir(), pathName.slice(2));
+  return pathName;
+}
+
+async function resolveAssetPath(rawPath?: string, cwd?: string): Promise<string | undefined> {
   const cleaned = normalizeAssetPath(rawPath);
   if (!cleaned) return undefined;
-  if (isAbsolute(cleaned)) return cleaned;
   const base = cwd && isAbsolute(cwd) ? cwd : process.cwd();
-  return resolve(base, cleaned);
+  const direct = isAbsolute(cleaned) ? cleaned : resolve(base, cleaned);
+  if (await isReadableImageFile(direct)) return direct;
+
+  const sameDirectoryFallback = await findClosestImage(dirname(direct), basename(cleaned));
+  if (sameDirectoryFallback) return sameDirectoryFallback;
+
+  if (!isAbsolute(cleaned)) {
+    const cwdFallback = await findClosestImage(base, basename(cleaned));
+    if (cwdFallback) return cwdFallback;
+  }
+  return direct;
 }
 
 function normalizeAssetPath(rawPath?: string): string {
   if (!rawPath) return '';
-  const trimmed = rawPath.trim().replace(/^["'`]+|["'`]+$/g, '');
+  const trimmed = rawPath
+    .trim()
+    .replace(/^!\[\[|\]\]$/g, '')
+    .replace(/^["'`<]+|["'`>\],，。；;:：]+$/g, '')
+    .split('|')[0]
+    .trim();
   if (!trimmed) return '';
   if (/^file:\/\//i.test(trimmed)) {
     try {
@@ -148,6 +197,85 @@ function normalizeAssetPath(rawPath?: string): string {
     }
   }
   return trimmed;
+}
+
+async function isReadableImageFile(pathName: string): Promise<boolean> {
+  if (!imageMimeType(pathName)) return false;
+  try {
+    const info = await stat(pathName);
+    return info.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function findClosestImage(root: string, requestedName: string): Promise<string | undefined> {
+  if (!root || !(await isDirectory(root))) return undefined;
+  const requestedExt = extname(requestedName).toLowerCase();
+  if (!requestedExt) return undefined;
+  const requestedKey = fuzzyImageKey(requestedName);
+  if (!requestedKey) return undefined;
+
+  let best: { path: string; score: number } | undefined;
+  const maxFiles = 6000;
+  let visitedFiles = 0;
+
+  async function visit(dir: string, depth: number): Promise<void> {
+    if (depth > 5 || visitedFiles >= maxFiles) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (visitedFiles >= maxFiles) return;
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!shouldSkipImageSearchDir(entry.name)) await visit(path, depth + 1);
+        continue;
+      }
+      if (!entry.isFile() || extname(entry.name).toLowerCase() !== requestedExt) continue;
+      visitedFiles += 1;
+      const score = imageNameScore(requestedKey, fuzzyImageKey(entry.name));
+      if (score > (best?.score ?? 0)) best = { path, score };
+    }
+  }
+
+  await visit(root, 0);
+  return best && best.score >= 36 ? best.path : undefined;
+}
+
+async function isDirectory(pathName: string): Promise<boolean> {
+  try {
+    return (await stat(pathName)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function shouldSkipImageSearchDir(name: string): boolean {
+  return name === 'node_modules' || name === '.git' || name === '.obsidian' || name === 'dist' || name === 'build';
+}
+
+function fuzzyImageKey(name: string): string {
+  return basename(name, extname(name))
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s_\-—–~·.,，。:：;；()[\]{}【】"'`!！?？]+/g, '');
+}
+
+function imageNameScore(requested: string, candidate: string): number {
+  if (!requested || !candidate) return 0;
+  if (requested === candidate) return 1000;
+  if (candidate.includes(requested)) return 700 + requested.length;
+  if (requested.includes(candidate)) return 420 + candidate.length;
+  let prefix = 0;
+  while (prefix < requested.length && prefix < candidate.length && requested[prefix] === candidate[prefix]) prefix += 1;
+  const requestedChars = new Set([...requested]);
+  let overlap = 0;
+  for (const char of candidate) if (requestedChars.has(char)) overlap += 1;
+  return prefix * 12 + overlap;
 }
 
 function imageMimeType(pathName: string): string | undefined {

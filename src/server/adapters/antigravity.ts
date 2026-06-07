@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { basename, join, relative, sep } from 'node:path';
 import { readFile, unlink, writeFile } from 'node:fs/promises';
 import type { Adapter, AdapterDeps } from './base.js';
-import { executable, exists, listFiles, listFilesRecursive } from './fs-utils.js';
+import { requireCommand, resolveCommand } from './command-discovery.js';
+import { exists, listFiles, listFilesRecursive } from './fs-utils.js';
 import { compactHistoryFrames, historyFrame, textFromContent } from './history.js';
 import { extractUsage, parseJsonLine, sessionFromFile } from '../../shared/parsers.js';
 import type { AdapterStatus, DeleteSessionLogsResult, Session, StartSessionInput, TerminalFrame, TimeScope, TokenUsage } from '../../shared/types.js';
@@ -13,7 +14,7 @@ export class AntigravityAdapter implements Adapter {
   label = 'Antigravity';
   color = '#4c6fff';
   defaultModel = 'app session';
-  private command = process.env.ANTIGRAVITY_CMD || join(homedir(), '.local', 'bin', 'agy');
+  private commandHint = process.env.ANTIGRAVITY_CMD || 'agy';
   private logDir = process.env.ANTIGRAVITY_LOG_DIR;
   private launcher: AdapterDeps['launcher'];
 
@@ -22,14 +23,14 @@ export class AntigravityAdapter implements Adapter {
   }
 
   async detect(): Promise<AdapterStatus> {
-    const ok = await executable(this.command);
+    const command = await resolveCommand({ envVar: 'ANTIGRAVITY_CMD', names: ['agy', 'antigravity'] });
     const sessions = await this.listSessions();
     return {
       appId: this.appId,
       label: this.label,
-      command: this.command,
-      status: ok ? 'connected' : 'missing',
-      message: ok ? 'Antigravity CLI 可用' : '未找到 Antigravity CLI，可设置 ANTIGRAVITY_CMD',
+      command: command ?? this.commandHint,
+      status: command ? 'connected' : 'missing',
+      message: command ? 'Antigravity CLI 可用' : '未找到 Antigravity CLI，可设置 ANTIGRAVITY_CMD 或将 agy 加入 PATH',
       sessions: sessions.length,
       tasks: sessions.length
     };
@@ -40,7 +41,7 @@ export class AntigravityAdapter implements Adapter {
   }
 
   async startSession(input: StartSessionInput, sessionId = `antigravity-${randomUUID()}`): Promise<Session> {
-    if (!(await executable(this.command))) throw new Error('ANTIGRAVITY_CMD is not configured');
+    const command = await requireCommand({ envVar: 'ANTIGRAVITY_CMD', names: ['agy', 'antigravity'] }, this.label);
     const timestamp = new Date().toISOString();
     const session: Session = {
       id: sessionId,
@@ -59,7 +60,7 @@ export class AntigravityAdapter implements Adapter {
     await this.launcher.launch({
       appId: this.appId,
       sessionId,
-      command: this.command,
+      command,
       args: input.prompt ? antigravityPrintArgs(input.prompt) : [],
       pty: !input.prompt,
       stdin: input.prompt ? 'ignore' : 'pipe',
@@ -70,22 +71,23 @@ export class AntigravityAdapter implements Adapter {
 
   async resumeSession(session: Session): Promise<void> {
     if (this.launcher.has(session.id)) return;
-    if (!(await executable(this.command))) throw new Error('ANTIGRAVITY_CMD is not configured');
+    const command = await requireCommand({ envVar: 'ANTIGRAVITY_CMD', names: ['agy', 'antigravity'] }, this.label);
     await this.launcher.launch({
       appId: this.appId,
       sessionId: session.id,
-      command: this.command,
+      command,
       args: session.nativeId ? ['--conversation', session.nativeId] : ['--continue'],
       cwd: session.cwd
     });
   }
 
   async sendPrompt(session: Session, prompt: string): Promise<void> {
+    const command = await requireCommand({ envVar: 'ANTIGRAVITY_CMD', names: ['agy', 'antigravity'] }, this.label);
     this.launcher.stop(session.id);
     await this.launcher.launch({
       appId: this.appId,
       sessionId: session.id,
-      command: this.command,
+      command,
       args: session.nativeId ? antigravityPrintArgs(prompt, ['--conversation', session.nativeId]) : antigravityPrintArgs(prompt),
       cwd: session.cwd,
       pty: false,

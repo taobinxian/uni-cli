@@ -117,6 +117,7 @@ export interface TerminalFrame {
   stream: 'stdout' | 'stderr' | 'system';
   text: string;
   createdAt: string;
+  partial?: boolean;
 }
 
 export interface SessionHistory {

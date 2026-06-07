@@ -9,6 +9,9 @@
     "dev:client": "vite --host 127.0.0.1",
     "build": "tsc -p tsconfig.server.json && vite build",
     "start": "node dist/server/server/index.js",
+    "start:local": "./scripts/start.sh",
+    "deploy:local": "./scripts/deploy-local.sh",
+    "stop:local": "./scripts/stop.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"

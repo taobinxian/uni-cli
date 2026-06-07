@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
-import { access } from 'node:fs/promises';
+import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Adapter, AdapterDeps } from './base.js';
+import { requireCommand as requireDiscoveredCommand, resolveCommand as resolveDiscoveredCommand } from './command-discovery.js';
 import { exists } from './fs-utils.js';
 import { compactHistoryFrames, historyFrame, textFromContent } from './history.js';
 import type { AdapterStatus, AppId, DeleteSessionLogsResult, Session, StartSessionInput, TerminalFrame, TimeScope, TokenUsage } from '../../shared/types.js';
@@ -17,11 +17,13 @@ interface OpenCodeLikeConfig {
   color: string;
   defaultModel: string;
   commandEnv: string;
-  commandCandidates: string[];
+  commandNames: string[];
+  commandCandidates?: string[];
   dbEnv: string;
   dbCandidates: string[];
   missingMessage: string;
   notConfiguredWhenMissing?: boolean;
+  sessionWhereSql?: string;
 }
 
 interface OpenCodeSessionRow {
@@ -56,7 +58,7 @@ class OpenCodeLikeAdapter implements Adapter {
   label: string;
   color: string;
   defaultModel: string;
-  private command: string;
+  private commandHint: string;
   private launcher: AdapterDeps['launcher'];
   private config: OpenCodeLikeConfig;
 
@@ -66,17 +68,16 @@ class OpenCodeLikeAdapter implements Adapter {
     this.label = config.label;
     this.color = config.color;
     this.defaultModel = config.defaultModel;
-    this.command = process.env[config.commandEnv] ?? config.commandCandidates[0];
+    this.commandHint = process.env[config.commandEnv] ?? config.commandNames[0];
     this.launcher = deps.launcher;
   }
 
   async detect(): Promise<AdapterStatus> {
     const command = await this.resolveCommand();
-    const commandOk = Boolean(command && (await executableCommand(command)));
     const sessions = await this.listSessions();
-    const status = commandOk ? 'connected' : this.config.notConfiguredWhenMissing && !process.env[this.config.commandEnv] ? 'not_configured' : 'missing';
+    const status = command ? 'connected' : this.config.notConfiguredWhenMissing && !process.env[this.config.commandEnv] ? 'not_configured' : 'missing';
     const dbPath = await this.existingDbPath();
-    const message = commandOk
+    const message = command
       ? dbPath
         ? `${this.label} CLI 可用，已读取本地会话库`
         : `${this.label} CLI 可用，暂未发现历史会话库`
@@ -84,7 +85,7 @@ class OpenCodeLikeAdapter implements Adapter {
     return {
       appId: this.appId,
       label: this.label,
-      command: command ?? this.command,
+      command: command ?? this.commandHint,
       status,
       message,
       sessions: sessions.length,
@@ -163,12 +164,14 @@ class OpenCodeLikeAdapter implements Adapter {
     let db: DatabaseSync | undefined;
     try {
       db = new DatabaseSync(dbPath);
+      const whereClause = this.config.sessionWhereSql ? `WHERE ${this.config.sessionWhereSql}` : '';
       const rows = db
         .prepare(
           `
           SELECT id, title, directory, time_created, time_updated, agent, model,
                  tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write
           FROM session
+          ${whereClause}
           ORDER BY time_updated DESC
           LIMIT 3000
         `
@@ -305,17 +308,18 @@ class OpenCodeLikeAdapter implements Adapter {
   }
 
   private async requireCommand(): Promise<string> {
-    const command = await this.resolveCommand();
-    if (!command || !(await executableCommand(command))) throw new Error(`${this.label} CLI is not configured`);
-    return command;
+    return requireDiscoveredCommand(
+      { envVar: this.config.commandEnv, names: this.config.commandNames, candidates: this.config.commandCandidates },
+      this.label
+    );
   }
 
   private async resolveCommand(): Promise<string | undefined> {
-    const candidates = [process.env[this.config.commandEnv], this.command, ...this.config.commandCandidates].filter(Boolean) as string[];
-    for (const candidate of candidates) {
-      if (await executableCommand(candidate)) return candidate;
-    }
-    return candidates[0];
+    return resolveDiscoveredCommand({
+      envVar: this.config.commandEnv,
+      names: this.config.commandNames,
+      candidates: this.config.commandCandidates
+    });
   }
 
   private async existingDbPath(): Promise<string | undefined> {
@@ -336,38 +340,399 @@ export class OpenCodeAdapter extends OpenCodeLikeAdapter {
         color: '#0284c7',
         defaultModel: 'opencode',
         commandEnv: 'OPENCODE_CMD',
-        commandCandidates: [join(homedir(), '.opencode', 'bin', 'opencode'), '/opt/homebrew/bin/opencode', '/usr/local/bin/opencode', 'opencode'],
+        commandNames: ['opencode'],
+        commandCandidates: [join(homedir(), '.opencode', 'bin', 'opencode')],
         dbEnv: 'OPENCODE_DB',
         dbCandidates: [join(homedir(), '.local', 'share', 'opencode', 'opencode.db')],
-        missingMessage: '未找到 OpenCode CLI，可设置 OPENCODE_CMD'
+        missingMessage: '未找到 OpenCode CLI，可设置 OPENCODE_CMD',
+        sessionWhereSql: 'agent IS NULL'
       },
       deps
     );
   }
 }
 
-export class OhMyPiAdapter extends OpenCodeLikeAdapter {
+export class OhMyPiAdapter implements Adapter {
+  appId: Extract<AppId, 'oh-my-pi'> = 'oh-my-pi';
+  label = 'Oh My Pi';
+  color = '#7c3aed';
+  defaultModel = 'oh-my-pi';
+  private commandHint = process.env.OH_MY_PI_CMD ?? 'omp';
+  private sessionRoot = process.env.OH_MY_PI_SESSION_DIR ?? join(homedir(), '.omp', 'agent', 'sessions');
+  private launcher: AdapterDeps['launcher'];
+
   constructor(deps: AdapterDeps) {
-    super(
-      {
-        appId: 'oh-my-pi',
-        label: 'Oh My Pi',
-        color: '#7c3aed',
-        defaultModel: 'oh-my-pi',
-        commandEnv: 'OH_MY_PI_CMD',
-        commandCandidates: ['oh-my-pi', 'ompi', 'pi'],
-        dbEnv: 'OH_MY_PI_DB',
-        dbCandidates: [
-          join(homedir(), '.local', 'share', 'oh-my-pi', 'opencode.db'),
-          join(homedir(), '.local', 'share', 'oh-my-pi', 'oh-my-pi.db'),
-          join(homedir(), '.oh-my-pi', 'opencode.db'),
-          join(homedir(), '.oh-my-pi', 'oh-my-pi.db')
-        ],
-        missingMessage: '未配置 Oh My Pi CLI，可设置 OH_MY_PI_CMD 和 OH_MY_PI_DB',
-        notConfiguredWhenMissing: true
-      },
-      deps
-    );
+    this.launcher = deps.launcher;
+  }
+
+  async detect(): Promise<AdapterStatus> {
+    const command = await this.resolveOmpCommand();
+    const sessions = await this.listSessions();
+    const hasSessionRoot = await exists(this.sessionRoot);
+    return {
+      appId: this.appId,
+      label: this.label,
+      command: command ?? this.commandHint,
+      status: command ? 'connected' : !process.env.OH_MY_PI_CMD ? 'not_configured' : 'missing',
+      message: command
+        ? hasSessionRoot
+          ? `Oh My Pi CLI 可用，已读取 ${this.sessionRoot}`
+          : `Oh My Pi CLI 可用，暂未发现会话目录 ${this.sessionRoot}`
+        : '未找到 Oh My Pi CLI，可设置 OH_MY_PI_CMD 或将 omp 加入 PATH',
+      sessions: sessions.length,
+      tasks: sessions.length
+    };
+  }
+
+  async listSessions(): Promise<Session[]> {
+    return this.parseHistoricalLogs();
+  }
+
+  async startSession(input: StartSessionInput, sessionId = `oh-my-pi-${randomUUID()}`): Promise<Session> {
+    const command = await this.requireOmpCommand();
+    const timestamp = new Date().toISOString();
+    const session: Session = {
+      id: sessionId,
+      appId: this.appId,
+      title: input.title ?? input.prompt?.slice(0, 48) ?? 'Oh My Pi session',
+      cwd: input.cwd,
+      status: 'running',
+      model: this.defaultModel,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      live: true
+    };
+    await this.launcher.launch({
+      appId: this.appId,
+      sessionId,
+      command,
+      args: input.prompt ? ompPrintArgs(input.prompt, { sessionRoot: this.sessionRoot }) : ompSessionRootArgs(this.sessionRoot),
+      pty: !input.prompt,
+      stdin: input.prompt ? 'ignore' : 'pipe',
+      cwd: input.cwd
+    });
+    return session;
+  }
+
+  async resumeSession(session: Session): Promise<void> {
+    if (this.launcher.has(session.id)) return;
+    const command = await this.requireOmpCommand();
+    const nativeId = ompNativeSessionId(session);
+    await this.launcher.launch({
+      appId: this.appId,
+      sessionId: session.id,
+      command,
+      args: [...ompSessionRootArgs(this.sessionRoot), ...(nativeId ? ['--resume', nativeId] : ['--continue'])],
+      cwd: session.cwd
+    });
+  }
+
+  async sendPrompt(session: Session, prompt: string): Promise<void> {
+    const command = await this.requireOmpCommand();
+    this.launcher.stop(session.id);
+    const nativeId = ompNativeSessionId(session);
+    await this.launcher.launch({
+      appId: this.appId,
+      sessionId: session.id,
+      command,
+      args: ompPrintArgs(prompt, { sessionId: nativeId, sessionRoot: this.sessionRoot }),
+      cwd: session.cwd,
+      pty: false,
+      stdin: 'ignore'
+    });
+  }
+
+  async stopSession(session: Session): Promise<void> {
+    this.launcher.stop(session.id);
+  }
+
+  async parseHistoricalLogs(): Promise<Session[]> {
+    const files = await findOmpSessionFiles(this.sessionRoot);
+    const parsed = await Promise.all(files.map((file) => parseOmpSessionSummary(file, this.appId, this.defaultModel)));
+    return parsed
+      .filter((item): item is Session => Boolean(item))
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+      .slice(0, 3000);
+  }
+
+  async readSessionHistory(session: Session): Promise<TerminalFrame[]> {
+    const filePath = await this.findSessionFile(session);
+    if (!filePath) return [];
+    return parseOmpSessionHistory(filePath, session);
+  }
+
+  async getTokenUsage(scope: TimeScope): Promise<TokenUsage[]> {
+    const sessions = await this.listSessions();
+    const inputTokens = sessions.reduce((sum, session) => sum + session.inputTokens, 0);
+    const outputTokens = sessions.reduce((sum, session) => sum + session.outputTokens, 0);
+    return [{ appId: this.appId, scope, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens }];
+  }
+
+  async deleteSessionLogs(session: Session): Promise<DeleteSessionLogsResult> {
+    const filePath = await this.findSessionFile(session);
+    if (!filePath) return emptyDeleteResult();
+    const deletedFiles: string[] = [];
+    try {
+      await rm(filePath, { force: true });
+      deletedFiles.push(filePath);
+    } catch {
+      // Keep deleting the sidecar logs if possible.
+    }
+    const sidecarDir = filePath.replace(/\.jsonl$/, '');
+    if (await exists(sidecarDir)) {
+      try {
+        await rm(sidecarDir, { recursive: true, force: true });
+        deletedFiles.push(sidecarDir);
+      } catch {
+        // Deleting the JSONL already removes the session from OMP history.
+      }
+    }
+    return deletedFiles.length ? { deletedFiles, modifiedFiles: [], skippedFiles: [] } : emptyDeleteResult();
+  }
+
+  private async requireOmpCommand(): Promise<string> {
+    return requireDiscoveredCommand({ envVar: 'OH_MY_PI_CMD', names: ['omp', 'oh-my-pi', 'oh-my-opencode'] }, this.label);
+  }
+
+  private async resolveOmpCommand(): Promise<string | undefined> {
+    return resolveDiscoveredCommand({ envVar: 'OH_MY_PI_CMD', names: ['omp', 'oh-my-pi', 'oh-my-opencode'] });
+  }
+
+  private async findSessionFile(session: Session): Promise<string | undefined> {
+    const nativeId = ompNativeSessionId(session);
+    const files = await findOmpSessionFiles(this.sessionRoot);
+    if (nativeId) {
+      const direct = files.find((file) => basename(file).includes(nativeId));
+      if (direct) return direct;
+    }
+    for (const file of files) {
+      const summary = await parseOmpSessionSummary(file, this.appId, this.defaultModel);
+      if (summary?.id === session.id || summary?.nativeId === nativeId) return file;
+    }
+    return undefined;
+  }
+}
+
+async function findOmpSessionFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  async function visit(dir: string, depth: number): Promise<void> {
+    if (depth > 8) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(fullPath, depth + 1);
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl') && !entry.name.startsWith('.')) {
+        files.push(fullPath);
+      }
+    }
+  }
+  await visit(root, 0);
+  return files;
+}
+
+async function parseOmpSessionSummary(filePath: string, appId: Extract<AppId, 'oh-my-pi'>, defaultModel: string): Promise<Session | undefined> {
+  const parsed = await readOmpJsonl(filePath);
+  if (!parsed.length) return undefined;
+  const meta = parsed.find((row) => row.type === 'session') ?? {};
+  const statInfo = await safeStat(filePath);
+  const nativeId = stringValue(meta.id) ?? ompIdFromFilePath(filePath);
+  if (!nativeId) return undefined;
+
+  let model = defaultModel;
+  let firstUserText = '';
+  let updatedAt = timestampIso(meta.timestamp) ?? statInfo?.mtime.toISOString() ?? new Date().toISOString();
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  for (const row of parsed) {
+    const rowTime = timestampIso(row.timestamp);
+    if (rowTime && Date.parse(rowTime) > Date.parse(updatedAt)) updatedAt = rowTime;
+    if (row.type === 'model_change') model = stringValue(row.model) ?? model;
+    const message = objectValue(row.message);
+    if (!message) continue;
+    const role = String(message.role ?? '').toLowerCase();
+    if (!firstUserText && role === 'user') firstUserText = ompContentText(message.content);
+    const usage = ompUsage(message.usage);
+    inputTokens += usage.inputTokens;
+    outputTokens += usage.outputTokens;
+  }
+
+  const createdAt = timestampIso(meta.timestamp) ?? statInfo?.birthtime.toISOString() ?? updatedAt;
+  return {
+    id: `${appId}-${nativeId}`,
+    appId,
+    nativeId,
+    title: cleanTitle(meta.title) || cleanTitle(firstUserText) || `Oh My Pi ${shortId(nativeId)}`,
+    cwd: stringValue(meta.cwd),
+    status: 'completed',
+    model,
+    createdAt,
+    updatedAt,
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    live: false
+  };
+}
+
+async function parseOmpSessionHistory(filePath: string, session: Session): Promise<TerminalFrame[]> {
+  const parsed = await readOmpJsonl(filePath);
+  const frames: Array<TerminalFrame | undefined> = [];
+  for (const row of parsed) {
+    const message = objectValue(row.message);
+    if (!message) continue;
+    const createdAt = timestampIso(row.timestamp) ?? timestampIso(message.timestamp) ?? session.updatedAt;
+    const role = String(message.role ?? '').toLowerCase();
+    if (role === 'user') {
+      frames.push(historyFrame(session, 'user', ompContentText(message.content), createdAt));
+      continue;
+    }
+    if (role === 'assistant') {
+      frames.push(...ompAssistantFrames(session, message.content, createdAt));
+      continue;
+    }
+    if (role === 'toolresult' || role === 'tool_result') {
+      frames.push(historyFrame(session, 'tool', ompToolResultText(message), createdAt));
+      continue;
+    }
+    if (role === 'system') {
+      frames.push(historyFrame(session, 'system', ompContentText(message.content), createdAt));
+    }
+  }
+  return compactHistoryFrames(frames);
+}
+
+async function readOmpJsonl(filePath: string): Promise<Record<string, unknown>[]> {
+  try {
+    const content = await readFile(filePath, 'utf8');
+    return content
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => parseJsonRecord(line))
+      .filter((row) => Object.keys(row).length > 0);
+  } catch {
+    return [];
+  }
+}
+
+function ompAssistantFrames(session: Session, content: unknown, createdAt: string): Array<TerminalFrame | undefined> {
+  if (!Array.isArray(content)) return [historyFrame(session, 'assistant', ompContentText(content), createdAt)];
+  const frames: Array<TerminalFrame | undefined> = [];
+  for (const part of content) {
+    const record = objectValue(part);
+    if (!record) {
+      const text = textFromContent(part);
+      if (text) frames.push(historyFrame(session, 'assistant', text, createdAt));
+      continue;
+    }
+    const type = String(record.type ?? '').toLowerCase();
+    if (type === 'thinking' || type === 'reasoning') {
+      const thinking = textFromContent(record.thinking ?? record.text ?? record.content);
+      if (thinking) frames.push(historyFrame(session, 'system', `思考/推理：${thinking}`, createdAt));
+      continue;
+    }
+    if (type === 'toolcall' || type === 'tool_call') {
+      frames.push(historyFrame(session, 'tool', ompToolCallText(record), createdAt));
+      continue;
+    }
+    const text = textFromContent(record);
+    if (text) frames.push(historyFrame(session, 'assistant', text, createdAt));
+  }
+  return frames.length ? frames : [historyFrame(session, 'assistant', ompContentText(content), createdAt)];
+}
+
+function ompToolCallText(record: Record<string, unknown>): string {
+  const name = stringValue(record.name) ?? stringValue(record.tool) ?? '工具调用';
+  const args = record.arguments ?? record.input;
+  const formattedArgs = formatJsonLike(args);
+  return formattedArgs ? `${name}\n${formattedArgs}` : name;
+}
+
+function ompToolResultText(message: Record<string, unknown>): string {
+  const name = stringValue(message.toolName) ?? '工具结果';
+  const content = ompContentText(message.content);
+  const details = formatJsonLike(message.details);
+  return [name, content, details].filter(Boolean).join('\n');
+}
+
+function ompContentText(content: unknown): string {
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        const record = objectValue(part);
+        if (!record) return textFromContent(part);
+        const type = String(record.type ?? '').toLowerCase();
+        if (type === 'toolcall' || type === 'tool_call') return ompToolCallText(record);
+        if (type === 'thinking' || type === 'reasoning') return textFromContent(record.thinking ?? record.text ?? record.content);
+        return textFromContent(record);
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return textFromContent(content);
+}
+
+function ompUsage(value: unknown): { inputTokens: number; outputTokens: number } {
+  const usage = objectValue(value);
+  if (!usage) return { inputTokens: 0, outputTokens: 0 };
+  const inputTokens = safeToken(usage.input) + safeToken(usage.cacheRead) + safeToken(usage.cacheWrite);
+  const rawOutputTokens = safeToken(usage.output);
+  const totalTokens = safeToken(usage.totalTokens);
+  return {
+    inputTokens,
+    outputTokens: totalTokens > inputTokens ? totalTokens - inputTokens : rawOutputTokens
+  };
+}
+
+function ompPrintArgs(prompt: string, options: { sessionId?: string; sessionRoot?: string } = {}): string[] {
+  return [...ompSessionRootArgs(options.sessionRoot), '-p', ...(options.sessionId ? ['--resume', options.sessionId] : []), prompt];
+}
+
+function ompSessionRootArgs(sessionRoot?: string): string[] {
+  return sessionRoot ? ['--session-dir', sessionRoot] : [];
+}
+
+function ompNativeSessionId(session: Session): string {
+  if (session.nativeId) return session.nativeId;
+  const prefix = 'oh-my-pi-';
+  return session.id.startsWith(prefix) ? session.id.slice(prefix.length) : session.id;
+}
+
+function ompIdFromFilePath(filePath: string): string | undefined {
+  const name = basename(filePath).replace(/\.jsonl$/, '');
+  const match = name.match(/_([0-9a-f]{8,}(?:-[0-9a-f]{4,})*)$/i);
+  return match?.[1] ?? (name || undefined);
+}
+
+async function safeStat(filePath: string) {
+  try {
+    return await stat(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+}
+
+function formatJsonLike(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return '';
   }
 }
 
@@ -382,28 +747,8 @@ function runArgs(prompt: string, options: { sessionId?: string; cwd?: string } =
   ];
 }
 
-function nativeSessionId(session: Session, appId: OpenCodeLikeAppId): string {
-  if (session.nativeId) return session.nativeId;
-  const prefix = `${appId}-`;
-  return session.id.startsWith(prefix) ? session.id.slice(prefix.length) : session.id;
-}
-
-async function executableCommand(command: string): Promise<boolean> {
-  if (command.includes('/')) return executablePath(command);
-  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
-    if (!dir) continue;
-    if (await executablePath(join(dir, command))) return true;
-  }
-  return false;
-}
-
-async function executablePath(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
+function nativeSessionId(session: Session, _appId: OpenCodeLikeAppId): string | undefined {
+  return session.nativeId;
 }
 
 function deleteOpenCodeSessionRows(db: DatabaseSync, sessionId: string): boolean {
@@ -478,6 +823,10 @@ function parseJsonRecord(value: unknown): Record<string, unknown> {
 }
 
 function timestampIso(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim() && Number.isNaN(Number(value))) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  }
   const raw = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
   if (!Number.isFinite(raw) || raw <= 0) return undefined;
   const millis = raw > 10_000_000_000 ? raw : raw * 1000;

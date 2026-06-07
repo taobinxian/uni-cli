@@ -19,6 +19,7 @@ export async function buildServer() {
   const launcher = new LauncherService(bus);
   const adapters = new AdapterManager(launcher);
   const sessions = new SessionManager(store, adapters, bus);
+  launcher.onExit((info) => sessions.handleLauncherExit(info));
   const control = new ControlGateway(sessions);
   const tokens = new TokenAggregator(store);
 

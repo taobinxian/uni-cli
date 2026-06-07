@@ -14,15 +14,32 @@ interface LaunchInput {
   stdin?: 'pipe' | 'ignore';
 }
 
+interface RuntimeLaunchInput extends LaunchInput {
+  generation: number;
+}
+
+export interface LauncherExitInfo {
+  appId: AppId;
+  sessionId: string;
+  reason: 'completed' | 'stopped' | 'failed';
+  code?: number | null;
+  signal?: string | number | null;
+}
+
 interface LiveProcess {
   sessionId: string;
   appId: AppId;
+  generation: number;
   write(text: string): void;
   stop(): void;
 }
 
 export class LauncherService {
   private live = new Map<string, LiveProcess>();
+  private generations = new Map<string, number>();
+  private stoppedGenerations = new Set<string>();
+  private finishedGenerations = new Set<string>();
+  private exitHandlers = new Set<(info: LauncherExitInfo) => void>();
   private bus: EventBus;
 
   constructor(bus: EventBus) {
@@ -35,17 +52,25 @@ export class LauncherService {
 
   async launch(input: LaunchInput): Promise<void> {
     if (this.live.has(input.sessionId)) return;
+    const generation = (this.generations.get(input.sessionId) ?? 0) + 1;
+    this.generations.set(input.sessionId, generation);
+    const runtimeInput: RuntimeLaunchInput = { ...input, generation };
     const usePty = input.pty ?? needsScriptPty(input.command);
     if (usePty) {
-      const ptyProcess = await this.tryPty(input);
+      const ptyProcess = await this.tryPty(runtimeInput);
       if (ptyProcess) {
         this.live.set(input.sessionId, ptyProcess);
         return;
       }
-      if (this.launchPythonPty(input)) return;
-      if (this.launchScriptPty(input)) return;
+      if (this.launchPythonPty(runtimeInput)) return;
+      if (this.launchScriptPty(runtimeInput)) return;
     }
-    this.launchChildProcess(input);
+    this.launchChildProcess(runtimeInput);
+  }
+
+  onExit(handler: (info: LauncherExitInfo) => void): () => void {
+    this.exitHandlers.add(handler);
+    return () => this.exitHandlers.delete(handler);
   }
 
   write(sessionId: string, text: string): boolean {
@@ -58,12 +83,13 @@ export class LauncherService {
   stop(sessionId: string): boolean {
     const live = this.live.get(sessionId);
     if (!live) return false;
+    this.stoppedGenerations.add(generationKey(live.sessionId, live.generation));
     live.stop();
     this.live.delete(sessionId);
     return true;
   }
 
-  private async tryPty(input: LaunchInput): Promise<LiveProcess | undefined> {
+  private async tryPty(input: RuntimeLaunchInput): Promise<LiveProcess | undefined> {
     try {
       const specifier = 'node-pty';
       const nodePty = await import(specifier);
@@ -75,10 +101,11 @@ export class LauncherService {
         env: terminalEnv()
       });
       term.onData((text: string) => this.emit(input, 'stdout', text));
-      term.onExit(() => this.live.delete(input.sessionId));
+      term.onExit((event: { exitCode?: number; signal?: string | number }) => this.finish(input, event.exitCode ?? null, event.signal ?? null));
       return {
         sessionId: input.sessionId,
         appId: input.appId,
+        generation: input.generation,
         write: (text) => term.write(withTerminalEnter(text)),
         stop: () => term.kill()
       };
@@ -87,7 +114,7 @@ export class LauncherService {
     }
   }
 
-  private launchScriptPty(input: LaunchInput): boolean {
+  private launchScriptPty(input: RuntimeLaunchInput): boolean {
     if (process.platform !== 'darwin' || !existsSync('/usr/bin/script')) return false;
     const child = spawn('/usr/bin/script', ['-q', '/dev/null', input.command, ...input.args], {
       cwd: input.cwd ?? process.cwd(),
@@ -102,17 +129,18 @@ export class LauncherService {
       const text = cleanScriptPtyOutput(chunk.toString());
       if (text) this.emit(input, 'stderr', text);
     });
-    child.on('close', () => this.live.delete(input.sessionId));
+    child.on('close', (code, signal) => this.finish(input, code, signal));
     this.live.set(input.sessionId, {
       sessionId: input.sessionId,
       appId: input.appId,
+      generation: input.generation,
       write: (text) => child.stdin?.write(withTerminalEnter(text)),
       stop: () => stopChild(child)
     });
     return true;
   }
 
-  private launchPythonPty(input: LaunchInput): boolean {
+  private launchPythonPty(input: RuntimeLaunchInput): boolean {
     const child = spawn(process.env.WORKBENCH_PYTHON ?? 'python3', ['-u', '-c', PYTHON_PTY_BRIDGE, input.command, ...input.args], {
       cwd: input.cwd ?? process.cwd(),
       env: terminalEnv(),
@@ -124,19 +152,20 @@ export class LauncherService {
     child.on('error', (error) => {
       started = false;
       this.emit(input, 'stderr', `pty bridge failed: ${error.message}\n`);
-      this.live.delete(input.sessionId);
+      this.finish(input, 1, null);
     });
-    child.on('close', () => this.live.delete(input.sessionId));
+    child.on('close', (code, signal) => this.finish(input, code, signal));
     this.live.set(input.sessionId, {
       sessionId: input.sessionId,
       appId: input.appId,
+      generation: input.generation,
       write: (text) => child.stdin?.write(withTerminalEnter(text)),
       stop: () => stopChild(child)
     });
     return started;
   }
 
-  private launchChildProcess(input: LaunchInput): void {
+  private launchChildProcess(input: RuntimeLaunchInput): void {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd ?? process.cwd(),
       env: terminalEnv(),
@@ -145,17 +174,41 @@ export class LauncherService {
     });
     child.stdout?.on('data', (chunk) => this.emit(input, 'stdout', chunk.toString()));
     child.stderr?.on('data', (chunk) => this.emit(input, 'stderr', chunk.toString()));
-    child.on('error', (error) => this.emit(input, 'stderr', `process failed: ${error.message}\n`));
-    child.on('close', () => this.live.delete(input.sessionId));
+    child.on('error', (error) => {
+      this.emit(input, 'stderr', `process failed: ${error.message}\n`);
+      this.finish(input, 1, null);
+    });
+    child.on('close', (code, signal) => this.finish(input, code, signal));
     this.live.set(input.sessionId, {
       sessionId: input.sessionId,
       appId: input.appId,
+      generation: input.generation,
       write: (text) => child.stdin?.write(withLineFeed(text)),
       stop: () => stopChild(child)
     });
   }
 
+  private finish(input: RuntimeLaunchInput, code: number | null, signal: string | number | null): void {
+    const key = generationKey(input.sessionId, input.generation);
+    if (this.finishedGenerations.has(key)) return;
+    this.finishedGenerations.add(key);
+    const live = this.live.get(input.sessionId);
+    if (live?.generation === input.generation) this.live.delete(input.sessionId);
+    const stopped = this.stoppedGenerations.delete(key);
+    if (this.generations.get(input.sessionId) !== input.generation) return;
+    const reason = stopped ? 'stopped' : code === 0 ? 'completed' : 'failed';
+    const info: LauncherExitInfo = {
+      appId: input.appId,
+      sessionId: input.sessionId,
+      reason,
+      code,
+      signal
+    };
+    for (const handler of this.exitHandlers) handler(info);
+  }
+
   private emit(input: LaunchInput, stream: TerminalFrame['stream'], text: string): void {
+    if (isIgnorableTerminalNoise(input.appId, text)) return;
     this.bus.terminal({
       appId: input.appId,
       sessionId: input.sessionId,
@@ -166,17 +219,51 @@ export class LauncherService {
   }
 }
 
+function generationKey(sessionId: string, generation: number): string {
+  return `${sessionId}:${generation}`;
+}
+
 function stopChild(child: ChildProcess): void {
   if (!child.killed) child.kill('SIGTERM');
 }
 
 function terminalEnv(): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
-    TERM: process.env.WORKBENCH_TERM ?? 'xterm-256color',
-    COLORTERM: process.env.COLORTERM ?? 'truecolor',
-    FORCE_COLOR: process.env.FORCE_COLOR ?? '1'
+    TERM: process.env.WORKBENCH_TERM || 'xterm-256color',
+    COLORTERM: process.env.COLORTERM || 'truecolor'
   };
+  delete env.NO_COLOR;
+  delete env.FORCE_COLOR;
+  if (process.env.WORKBENCH_FORCE_COLOR) env.FORCE_COLOR = process.env.WORKBENCH_FORCE_COLOR;
+  if (process.env.WORKBENCH_NO_COLOR === '1') {
+    env.NO_COLOR = '1';
+    delete env.FORCE_COLOR;
+  }
+  return env;
+}
+
+function isIgnorableTerminalNoise(appId: string, text: string): boolean {
+  const normalized = text
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ' ')
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return true;
+  if (/NO_COLOR/i.test(normalized) && /FORCE_COLOR/i.test(normalized)) return true;
+  if (/warnOnDeactivatedColors|getColorDepth|shouldColorize|internal:util\/colors|loadAssertionError/i.test(normalized)) return true;
+  if (/opentui-notifications|Capabilities|Ptmux|\]66;|\]1337;|\]99;|\]10;|\]11;|\]12;/i.test(normalized)) return true;
+  if (appId === 'oh-my-pi' && /Connecting to MCP servers|(?:^|\s)omp v\d/i.test(normalized)) return true;
+  if (isBlockUiSplash(normalized)) return true;
+  return false;
+}
+
+function isBlockUiSplash(text: string): boolean {
+  const compact = text.replace(/\s+/g, '');
+  if (!compact) return false;
+  const blockChars = compact.match(/[▀▄█▌▐▁▂▃▄▅▆▇╘╒╓╔╗╝╚║═│─┌┐└┘|]/g)?.length ?? 0;
+  const letters = compact.match(/[A-Za-z0-9\u4e00-\u9fff]/g)?.length ?? 0;
+  return blockChars >= 8 && blockChars > compact.length * 0.35 && letters < blockChars;
 }
 
 function needsScriptPty(command: string): boolean {

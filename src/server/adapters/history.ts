@@ -37,8 +37,7 @@ export function cleanHistoryText(text: string): string {
     .split('\n')
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean)
-    .join('\n')
-    .slice(0, 6000);
+    .join('\n');
 }
 
 function textFromContentInner(value: unknown, depth: number): string {
@@ -80,7 +79,7 @@ function imageFromSource(source: unknown): string {
 
   const mediaType = firstString(record.media_type, record.mediaType, record.mime_type, record.mimeType);
   const data = firstString(record.data);
-  if (mediaType?.startsWith('image/') && data && data.length < 4_500) return `data:${mediaType};base64,${data}`;
+  if (mediaType?.startsWith('image/') && data) return `data:${mediaType};base64,${data}`;
   return '';
 }
 
