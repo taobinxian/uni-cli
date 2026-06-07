@@ -8,8 +8,10 @@ import type { AppId, CommandRun, Confirmation, DeleteSessionLogsResult, DeleteSe
 const APP_META = {
   codex: { label: 'Codex', color: '#0d8a72', billingMode: 'subscription' as const },
   claude: { label: 'Claude', color: '#bd5b2f', billingMode: 'usage' as const },
-  antigravity: { label: 'Antigravity', color: '#4c6fff', billingMode: 'included' as const }
-};
+  antigravity: { label: 'Antigravity', color: '#4c6fff', billingMode: 'included' as const },
+  'oh-my-pi': { label: 'Oh My Pi', color: '#7c3aed', billingMode: 'usage' as const },
+  opencode: { label: 'OpenCode', color: '#0284c7', billingMode: 'usage' as const }
+} satisfies Record<AppId, { label: string; color: string; billingMode: Task['billingMode'] }>;
 const DEFAULT_HISTORY_PAGE_SIZE = 12;
 const MAX_HISTORY_PAGE_SIZE = 40;
 
@@ -340,7 +342,7 @@ function taskFromSession(session: Session, title: string): Task {
     title,
     cwd: session.cwd,
     status: session.status,
-    billingMode: session.appId === 'claude' ? 'usage' : session.appId === 'antigravity' ? 'included' : 'subscription',
+    billingMode: APP_META[session.appId].billingMode,
     startedAt: session.createdAt,
     updatedAt: session.updatedAt,
     durationMs: Math.max(60_000, Date.parse(session.updatedAt) - Date.parse(session.createdAt)),

@@ -1,3 +1,6 @@
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { extname, isAbsolute, resolve } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { AppId, PromptInput, StartSessionInput, TaskStatus, TimeScope } from '../shared/types.js';
 import { Store } from './db.js';
@@ -12,6 +15,26 @@ export async function registerRoutes(
   const { store, control, tokens } = deps;
 
   fastify.get('/api/health', async () => ({ ok: true, timestamp: new Date().toISOString() }));
+
+  fastify.get('/api/assets/image', async (request, reply) => {
+    const query = request.query as { path?: string; cwd?: string };
+    const filePath = resolveAssetPath(query.path, query.cwd);
+    if (!filePath) return reply.code(400).send({ error: 'Image path is required' });
+
+    const mimeType = imageMimeType(filePath);
+    if (!mimeType) return reply.code(400).send({ error: 'Unsupported image type' });
+
+    try {
+      const info = await stat(filePath);
+      if (!info.isFile()) return reply.code(404).send({ error: 'Image not found' });
+      return reply
+        .type(mimeType)
+        .header('Cache-Control', 'private, max-age=60')
+        .send(createReadStream(filePath));
+    } catch {
+      return reply.code(404).send({ error: 'Image not found' });
+    }
+  });
 
   fastify.get('/api/dashboard', async () => {
     const tokenSnapshot = tokens.get('day');
@@ -103,4 +126,37 @@ export async function registerRoutes(
     const { id } = request.params as { id: string };
     return control.rejectConfirmation(id);
   });
+}
+
+function resolveAssetPath(rawPath?: string, cwd?: string): string | undefined {
+  const cleaned = normalizeAssetPath(rawPath);
+  if (!cleaned) return undefined;
+  if (isAbsolute(cleaned)) return cleaned;
+  const base = cwd && isAbsolute(cwd) ? cwd : process.cwd();
+  return resolve(base, cleaned);
+}
+
+function normalizeAssetPath(rawPath?: string): string {
+  if (!rawPath) return '';
+  const trimmed = rawPath.trim().replace(/^["'`]+|["'`]+$/g, '');
+  if (!trimmed) return '';
+  if (/^file:\/\//i.test(trimmed)) {
+    try {
+      return decodeURIComponent(new URL(trimmed).pathname);
+    } catch {
+      return trimmed.replace(/^file:\/\//i, '');
+    }
+  }
+  return trimmed;
+}
+
+function imageMimeType(pathName: string): string | undefined {
+  const ext = extname(pathName).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.bmp') return 'image/bmp';
+  if (ext === '.svg') return 'image/svg+xml';
+  return undefined;
 }

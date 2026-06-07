@@ -182,7 +182,7 @@ function terminalEnv(): NodeJS.ProcessEnv {
 function needsScriptPty(command: string): boolean {
   if (process.env.WORKBENCH_SCRIPT_PTY === '1') return true;
   const name = basename(command).toLowerCase();
-  return name === 'codex' || name === 'claude' || name.includes('antigravity');
+  return name === 'codex' || name === 'claude' || name === 'opencode' || name.includes('antigravity') || name.includes('oh-my-pi');
 }
 
 function cleanScriptPtyOutput(text: string): string {

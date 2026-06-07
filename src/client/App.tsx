@@ -16,9 +16,9 @@ import {
   stopSession
 } from './api.js';
 import { formatDuration, formatTokenCount } from '../shared/format.js';
-import type { AppId, AppInfo, Confirmation, EventRecord, Session, TerminalFrame, TimeScope, TokenUsage, UsagePoint } from '../shared/types.js';
+import { APP_ORDER, type AppId, type AppInfo, type Confirmation, type EventRecord, type Session, type TerminalFrame, type TimeScope, type TokenUsage, type UsagePoint } from '../shared/types.js';
 
-const appOrder: AppId[] = ['codex', 'claude', 'antigravity'];
+const appOrder = APP_ORDER;
 const TOKEN_ALERT_THRESHOLD = 2_000_000;
 const HISTORY_PAGE_SIZE = 12;
 const SESSION_PAGE_SIZE = 20;
@@ -26,7 +26,23 @@ const LIVE_TERMINAL_FRAME_LIMIT = 80;
 const TERMINAL_DISPLAY_LINE_LIMIT = 360;
 const WORKSPACE_SPLIT_STORAGE_KEY = 'ai-workbench.workspace-split.v1';
 const DEFAULT_WORKSPACE_LEFT_PERCENT = 46;
+const FOCUS_LAYOUT_STORAGE_KEY = 'ai-workbench.focus-layout.v1';
+const DEFAULT_FOCUS_LEFT_WIDTH = 138;
+const DEFAULT_FOCUS_RIGHT_WIDTH = 176;
+const FOCUS_RESIZER_WIDTH = 6;
+const FOCUS_MIN_LEFT_WIDTH = 112;
+const FOCUS_MAX_LEFT_WIDTH = 340;
+const FOCUS_MIN_RIGHT_WIDTH = 132;
+const FOCUS_MAX_RIGHT_WIDTH = 380;
+const FOCUS_MIN_CENTER_WIDTH = 420;
+const THEME_STORAGE_KEY = 'ai-workbench.theme.v1';
 type NavKey = 'overview' | 'sessions' | 'confirmations' | AppId;
+type FocusResizeSide = 'left' | 'right';
+type ThemeMode = 'light' | 'dark';
+interface FocusLayout {
+  left: number;
+  right: number;
+}
 
 export function App() {
   const [apps, setApps] = useState<AppInfo[]>([]);
@@ -45,7 +61,7 @@ export function App() {
   const [selectedApp, setSelectedApp] = useState<AppId>('codex');
   const [selectedSessionId, setSelectedSessionId] = useState<string>();
   const [activeNav, setActiveNav] = useState<NavKey>(() => navFromHash());
-  const [prompt, setPrompt] = useState('继续当前任务，先说明失败原因，再只修改必要文件；完成后运行相关测试。');
+  const [prompt, setPrompt] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<Session>();
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
@@ -307,17 +323,31 @@ export function App() {
     }
   }
 
+  async function createNewSessionForApp(appId: AppId) {
+    setError(undefined);
+    setSelectedApp(appId);
+    setActiveNav(appId);
+    syncHash(appId);
+    const session = await startSession({ appId, title: `${appLabel(appId)} session` });
+    await reloadLists(appId);
+    setSelectedSessionId(session.id);
+    setPrompt('');
+  }
+
   async function handleNewSession() {
     try {
-      const session = await startSession({ appId: selectedApp, title: prompt.slice(0, 48) || `${appLabel(selectedApp)} session` });
-      if (prompt.trim()) {
-        const result = await sendPrompt(session.id, { prompt });
-        if (result.confirmation) setConfirmations((current) => mergeConfirmation(current, result.confirmation!));
-      }
-      await reloadLists(selectedApp);
-      setSelectedSessionId(session.id);
+      await createNewSessionForApp(selectedApp);
     } catch (err) {
       setError(String(err));
+    }
+  }
+
+  async function handleNewSessionForApp(appId: AppId) {
+    try {
+      await createNewSessionForApp(appId);
+    } catch (err) {
+      setError(String(err));
+      throw err;
     }
   }
 
@@ -541,37 +571,45 @@ export function App() {
 
   return (
     <>
-      <div className="app-shell">
-        <Sidebar
-          activeNav={activeNav}
-          apps={apps}
-          sessions={sessions}
-          confirmations={confirmations}
-          onNavigate={handleNavigate}
-        />
-        <main className="main">
-          <header className="topbar">
-            <div>
-              <h1>{pageTitle(activeNav)}</h1>
-              <p>{pageSubtitle(activeNav, scope)}</p>
-            </div>
-            <div className="actions">
-              <div className="segmented">
-                {(['day', 'week', 'month'] as TimeScope[]).map((item) => (
-                  <button key={item} className={scope === item ? 'active' : ''} onClick={() => setScope(item)}>
-                    {item === 'day' ? '日' : item === 'week' ? '周' : '月'}
-                  </button>
-                ))}
-              </div>
-              <button className="icon-button" onClick={() => refreshAll()} title="刷新">↻</button>
-              <button className="primary-button" data-testid="export-report" onClick={handleExportReport}>导出报表</button>
-            </div>
-          </header>
-
-          {error && <div className="error-banner">{error}</div>}
-          {pageBody}
-        </main>
-      </div>
+      <FocusConsole
+        apps={apps}
+        sessions={sessions}
+        events={events}
+        confirmations={confirmations}
+        tokenUsage={tokenUsage}
+        scope={scope}
+        setScope={setScope}
+        selectedApp={selectedApp}
+        selectedSession={selectedSession}
+        selectedSessionId={selectedSession?.id}
+        prompt={prompt}
+        setPrompt={setPrompt}
+        terminalFrames={terminalFrames}
+        historyHasMore={historyHasMore}
+        historyLoading={historyLoading}
+        onLoadMoreHistory={loadMoreHistory}
+        onSelectSession={(session) => {
+          setSelectedApp(session.appId);
+          setSelectedSessionId(session.id);
+          setActiveNav(session.appId);
+          syncHash(session.appId);
+        }}
+        onSelectApp={(appId) => {
+          handleSwitchApp(appId);
+          setActiveNav(appId);
+          syncHash(appId);
+        }}
+        onPrompt={handlePrompt}
+        onNewSession={handleNewSession}
+        onNewSessionForApp={handleNewSessionForApp}
+        onContinue={handleContinue}
+        onStop={handleStop}
+        onDelete={handleDeleteSession}
+        onResolve={handleResolve}
+        onRefresh={refreshAll}
+        onExport={handleExportReport}
+        error={error}
+      />
       {deleteTarget && (
         <DeleteSessionDialog
           session={deleteTarget}
@@ -587,6 +625,527 @@ export function App() {
       )}
     </>
   );
+}
+
+type SessionFilter = 'all' | 'running' | 'history';
+
+function FocusConsole(props: {
+  apps: AppInfo[];
+  sessions: Session[];
+  events: EventRecord[];
+  confirmations: Confirmation[];
+  tokenUsage: TokenUsage[];
+  scope: TimeScope;
+  setScope(scope: TimeScope): void;
+  selectedApp: AppId;
+  selectedSession?: Session;
+  selectedSessionId?: string;
+  prompt: string;
+  setPrompt(value: string): void;
+  terminalFrames: TerminalFrame[];
+  historyHasMore: boolean;
+  historyLoading: boolean;
+  onLoadMoreHistory(): void;
+  onSelectSession(session: Session): void;
+  onSelectApp(appId: AppId): void;
+  onPrompt(): void;
+  onNewSession(): void;
+  onNewSessionForApp(appId: AppId): Promise<void>;
+  onContinue(): void;
+  onStop(): void;
+  onDelete(): void;
+  onResolve(id: string, approved: boolean): void;
+  onRefresh(): void;
+  onExport(): void;
+  error?: string;
+}) {
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [tokenModalOpen, setTokenModalOpen] = useState(false);
+  const [layout, setLayout] = useState<FocusLayout>(() => readFocusLayout());
+  const [theme, setTheme] = useState<ThemeMode>(() => readThemeMode());
+  const shellRef = useRef<HTMLDivElement>(null);
+  const selectedAppInfo = props.apps.find((app) => app.appId === props.selectedApp);
+  const openTabs = focusTabs(props.sessions, props.selectedSession);
+  const sessionConfirmations = props.confirmations.filter((item) => item.sessionId === props.selectedSession?.id);
+  const selectedEvents = props.events.filter((event) => event.sessionId === props.selectedSession?.id || event.appId === props.selectedApp).slice(0, 6);
+  const requestNewSession = () => setNewSessionOpen(true);
+  const shellStyle = {
+    '--focus-left-width': `${layout.left}px`,
+    '--focus-right-width': `${layout.right}px`
+  } as CSSProperties;
+
+  useEffect(() => {
+    applyThemeMode(theme);
+  }, [theme]);
+
+  function toggleTheme() {
+    setTheme((current) => {
+      const next = current === 'dark' ? 'light' : 'dark';
+      writeThemeMode(next);
+      return next;
+    });
+  }
+
+  function updateFocusLayout(side: FocusResizeSide, clientX: number) {
+    const node = shellRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    setLayout((current) => {
+      const maxLeft = Math.min(FOCUS_MAX_LEFT_WIDTH, rect.width - current.right - FOCUS_MIN_CENTER_WIDTH - FOCUS_RESIZER_WIDTH * 2);
+      const maxRight = Math.min(FOCUS_MAX_RIGHT_WIDTH, rect.width - current.left - FOCUS_MIN_CENTER_WIDTH - FOCUS_RESIZER_WIDTH * 2);
+      const next =
+        side === 'left'
+          ? { ...current, left: clamp(clientX - rect.left, FOCUS_MIN_LEFT_WIDTH, Math.max(FOCUS_MIN_LEFT_WIDTH, maxLeft)) }
+          : { ...current, right: clamp(rect.right - clientX, FOCUS_MIN_RIGHT_WIDTH, Math.max(FOCUS_MIN_RIGHT_WIDTH, maxRight)) };
+      writeFocusLayout(next);
+      return next;
+    });
+  }
+
+  function handleFocusResizeStart(side: FocusResizeSide, event: ReactMouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    document.body.classList.add('resizing-focus');
+
+    const onMouseMove = (moveEvent: MouseEvent) => updateFocusLayout(side, moveEvent.clientX);
+    const onMouseUp = () => {
+      document.body.classList.remove('resizing-focus');
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }
+
+  function handleFocusResizeKey(side: FocusResizeSide, event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const direction = event.key === 'ArrowRight' ? 1 : -1;
+    setLayout((current) => {
+      const delta = 8;
+      const next =
+        side === 'left'
+          ? { ...current, left: clamp(current.left + direction * delta, FOCUS_MIN_LEFT_WIDTH, FOCUS_MAX_LEFT_WIDTH) }
+          : { ...current, right: clamp(current.right - direction * delta, FOCUS_MIN_RIGHT_WIDTH, FOCUS_MAX_RIGHT_WIDTH) };
+      writeFocusLayout(next);
+      return next;
+    });
+  }
+
+  return (
+    <>
+      <div className="focus-shell" data-testid="focus-console" ref={shellRef} style={shellStyle}>
+        <FocusSidebar
+          apps={props.apps}
+          sessions={props.sessions}
+          tokenUsage={props.tokenUsage}
+          scope={props.scope}
+          setScope={props.setScope}
+          selectedApp={props.selectedApp}
+          selectedSessionId={props.selectedSessionId}
+          confirmations={props.confirmations}
+          onSelectApp={props.onSelectApp}
+          onSelectSession={props.onSelectSession}
+          onRequestNewSession={requestNewSession}
+          onOpenTokenUsage={() => setTokenModalOpen(true)}
+          onRefresh={props.onRefresh}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+        <button
+          type="button"
+          className="focus-resizer left"
+          data-testid="focus-resizer-left"
+          aria-label="调整左侧会话列表宽度"
+          aria-valuemin={FOCUS_MIN_LEFT_WIDTH}
+          aria-valuemax={FOCUS_MAX_LEFT_WIDTH}
+          aria-valuenow={Math.round(layout.left)}
+          onMouseDown={(event) => handleFocusResizeStart('left', event)}
+          onKeyDown={(event) => handleFocusResizeKey('left', event)}
+        />
+        <main className="focus-stage" data-testid="control-panel">
+          <FocusTabs tabs={openTabs} selectedSessionId={props.selectedSessionId} onSelectSession={props.onSelectSession} onNewSession={requestNewSession} />
+          {props.error && <div className="focus-error">{props.error}</div>}
+          <FocusSessionHeader app={selectedAppInfo} session={props.selectedSession} confirmations={sessionConfirmations.length} />
+          <section className="focus-terminal-panel">
+            <TerminalConversation
+              session={props.selectedSession}
+              frames={props.terminalFrames}
+              hasMoreHistory={props.historyHasMore}
+              historyLoading={props.historyLoading}
+              onLoadMoreHistory={props.onLoadMoreHistory}
+            />
+          </section>
+          <FocusComposer
+            session={props.selectedSession}
+            prompt={props.prompt}
+            setPrompt={props.setPrompt}
+            onPrompt={props.onPrompt}
+            onNewSession={requestNewSession}
+            onContinue={props.onContinue}
+            onStop={props.onStop}
+            onDelete={props.onDelete}
+          />
+        </main>
+        <button
+          type="button"
+          className="focus-resizer right"
+          data-testid="focus-resizer-right"
+          aria-label="调整右侧详情栏宽度"
+          aria-valuemin={FOCUS_MIN_RIGHT_WIDTH}
+          aria-valuemax={FOCUS_MAX_RIGHT_WIDTH}
+          aria-valuenow={Math.round(layout.right)}
+          onMouseDown={(event) => handleFocusResizeStart('right', event)}
+          onKeyDown={(event) => handleFocusResizeKey('right', event)}
+        />
+        <FocusInspector
+          app={selectedAppInfo}
+          session={props.selectedSession}
+          usage={props.tokenUsage.find((row) => row.appId === props.selectedApp)}
+          confirmations={sessionConfirmations}
+          events={selectedEvents}
+          frames={props.terminalFrames}
+          onResolve={props.onResolve}
+          onExport={props.onExport}
+        />
+      </div>
+      {newSessionOpen && (
+        <NewSessionDialog
+          apps={props.apps}
+          selectedApp={props.selectedApp}
+          onClose={() => setNewSessionOpen(false)}
+          onCreate={props.onNewSessionForApp}
+        />
+      )}
+      {tokenModalOpen && (
+        <TokenUsageDialog
+          usage={props.tokenUsage}
+          scope={props.scope}
+          setScope={props.setScope}
+          onClose={() => setTokenModalOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function FocusSidebar(props: {
+  apps: AppInfo[];
+  sessions: Session[];
+  tokenUsage: TokenUsage[];
+  scope: TimeScope;
+  setScope(scope: TimeScope): void;
+  selectedApp: AppId;
+  selectedSessionId?: string;
+  confirmations: Confirmation[];
+  onSelectApp(appId: AppId): void;
+  onSelectSession(session: Session): void;
+  onRequestNewSession(): void;
+  onOpenTokenUsage(): void;
+  onRefresh(): void;
+  theme: ThemeMode;
+  onToggleTheme(): void;
+}) {
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<SessionFilter>('all');
+  const [expandedApps, setExpandedApps] = useState<Set<AppId>>(() => new Set());
+  const totalTokens = props.tokenUsage.reduce((sum, row) => sum + row.totalTokens, 0);
+  const connected = connectedCount(props.apps);
+
+  function toggleExpanded(appId: AppId) {
+    setExpandedApps((current) => {
+      const next = new Set(current);
+      if (next.has(appId)) next.delete(appId);
+      else next.add(appId);
+      return next;
+    });
+  }
+
+  return (
+    <aside className="focus-sidebar">
+      <header className="focus-brand">
+        <div className="brand-mark">AM</div>
+        <div>
+          <strong>Focus Console</strong>
+          <span>整合工作台</span>
+        </div>
+        <button type="button" className="icon-button small" onClick={props.onRequestNewSession} aria-label="新建会话">+</button>
+      </header>
+      <label className="focus-search">
+        <span>⌕</span>
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索会话..." />
+        <kbd>⌘K</kbd>
+      </label>
+      <div className="focus-filter" role="group" aria-label="会话过滤">
+        {(['all', 'running', 'history'] as SessionFilter[]).map((item) => (
+          <button key={item} type="button" className={filter === item ? 'active' : ''} onClick={() => setFilter(item)}>
+            {item === 'all' ? '全部' : item === 'running' ? '进行中' : '历史'}
+          </button>
+        ))}
+      </div>
+      <div className="focus-session-groups" data-testid="session-switcher">
+        {appOrder.map((appId) => {
+          const app = props.apps.find((item) => item.appId === appId);
+          const appSessions = filteredSessions(props.sessions, appId, filter, query);
+          const expanded = expandedApps.has(appId);
+          const visible = expanded ? appSessions : appSessions.slice(0, 6);
+          return (
+            <section className="focus-session-group" key={appId}>
+              <button type="button" className={`focus-app-row ${props.selectedApp === appId ? 'active' : ''}`} data-testid={`nav-${appId}`} onClick={() => props.onSelectApp(appId)}>
+                <span><i className={`dot ${appId}`} />{appLabel(appId)}</span>
+                <b>{app?.sessions ?? appSessions.length}</b>
+              </button>
+              <div className="focus-session-list">
+                {visible.map((session) => (
+                  <button
+                    type="button"
+                    key={session.id}
+                    data-testid={`session-row-${session.id}`}
+                    className={`focus-session-row ${session.appId} ${props.selectedSessionId === session.id ? 'active' : ''}`}
+                    onClick={() => props.onSelectSession(session)}
+                  >
+                    <strong>{session.title}</strong>
+                    <span><FocusStatusText session={session} /> {sessionShort(session.id)} · {formatTokenCount(session.totalTokens)}</span>
+                  </button>
+                ))}
+                {!visible.length && <div className="focus-empty">暂无匹配会话</div>}
+                {appSessions.length > visible.length && (
+                  <button type="button" className="focus-more" onClick={() => toggleExpanded(appId)}>
+                    显示其余 {appSessions.length - visible.length} 个 ↓
+                  </button>
+                )}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+      <FocusTokenDock usage={props.tokenUsage} scope={props.scope} setScope={props.setScope} totalTokens={totalTokens} onOpen={props.onOpenTokenUsage} />
+      <footer className="focus-sidebar-foot">
+        <span><i className="status-dot" />{connected}/{appOrder.length} CLI · {props.sessions.length} 会话</span>
+        <button type="button" onClick={props.onToggleTheme} aria-label={props.theme === 'dark' ? '切换亮色模式' : '切换暗色模式'} title={props.theme === 'dark' ? '切换亮色模式' : '切换暗色模式'}>
+          {props.theme === 'dark' ? '☀' : '◐'}
+        </button>
+        <button type="button" onClick={props.onRefresh} aria-label="刷新">↻</button>
+      </footer>
+    </aside>
+  );
+}
+
+function FocusTokenDock({ scope, setScope, totalTokens, onOpen }: { usage: TokenUsage[]; scope: TimeScope; setScope(scope: TimeScope): void; totalTokens: number; onOpen(): void }) {
+  return (
+    <section className="focus-token-dock" data-testid="token-count-card">
+      <button type="button" className="focus-token-head" onClick={onOpen} aria-haspopup="dialog">
+        <span>{scopeLabel(scope)} TOKEN · 全部 APP 展开 ›</span>
+        <strong>{formatTokenCount(totalTokens)}</strong>
+      </button>
+      <div className="focus-token-bars" aria-hidden="true">
+        {appOrder.map((appId) => <span key={appId} className={appId} />)}
+      </div>
+      <div className="focus-token-scopes">
+        {(['day', 'week', 'month'] as TimeScope[]).map((item) => (
+          <button key={item} type="button" className={scope === item ? 'active' : ''} onClick={() => setScope(item)}>
+            {item === 'day' ? '今日' : item === 'week' ? '本周' : '本月'}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FocusTabs({ tabs, selectedSessionId, onSelectSession, onNewSession }: { tabs: Session[]; selectedSessionId?: string; onSelectSession(session: Session): void; onNewSession(): void }) {
+  return (
+    <nav className="focus-tabs" aria-label="打开的会话">
+      {tabs.map((session) => (
+        <button key={session.id} type="button" className={`${session.appId} ${selectedSessionId === session.id ? 'active' : ''}`} onClick={() => onSelectSession(session)}>
+          <i className={`dot ${session.appId}`} />
+          <span>{session.title}</span>
+          <em>{sessionShort(session.id)}</em>
+          <b>×</b>
+        </button>
+      ))}
+      <button type="button" className="new-tab" onClick={onNewSession}>新会话</button>
+    </nav>
+  );
+}
+
+function FocusStatusText({ session }: { session: Session }) {
+  const label = session.live ? 'live' : statusLabel(session.status);
+  return <em className={`focus-status-text ${session.status} ${session.live ? 'live' : ''}`}>{label}</em>;
+}
+
+function FocusSessionHeader({ app, session, confirmations }: { app?: AppInfo; session?: Session; confirmations: number }) {
+  const appId = session?.appId ?? app?.appId ?? 'codex';
+  return (
+    <header className="focus-session-header">
+      <div className={`logo ${appId}`}>{appInitials(appId)}</div>
+      <div>
+        <h1>{session?.title ?? '未选择会话'}</h1>
+        <p>{session ? `${appLabel(session.appId)} ${sessionShort(session.id)} · ${session.model ?? 'model pending'} · ${session.cwd ?? '未记录目录'}` : app?.message ?? '从左侧选择一个会话继续'}</p>
+      </div>
+      <span className={`focus-live ${session?.live ? 'on' : ''}`}>{session?.live ? '● Live' : statusLabel(session?.status)}</span>
+      {confirmations > 0 && <span className="focus-confirmation-pill">{confirmations} 个确认</span>}
+    </header>
+  );
+}
+
+function FocusComposer(props: {
+  session?: Session;
+  prompt: string;
+  setPrompt(value: string): void;
+  onPrompt(): void;
+  onNewSession(): void;
+  onContinue(): void;
+  onStop(): void;
+  onDelete(): void;
+}) {
+  const quickActions = [
+    ['继续当前任务', '继续当前任务，先简要说明当前状态和下一步，然后只执行必要操作。'],
+    ['提交代码', '检查当前改动并运行必要验证；如果没有问题，创建一条清晰的 commit 提交当前代码。'],
+    ['创建 MR', '基于当前分支创建 Merge Request，补充标题、改动说明、测试结果和风险点。'],
+    ['合并 MR', '检查当前 Merge Request 状态、CI 和评审情况；满足条件后合并 MR。'],
+    ['部署服务器', '确认当前分支和环境信息，检查必要配置，然后按项目约定部署到服务器。']
+  ] as const;
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault();
+      if (props.session) props.onPrompt();
+    }
+  }
+
+  return (
+    <footer className="focus-composer">
+      <div className="focus-quick-actions">
+        {quickActions.map(([label, value]) => <button key={label} type="button" onClick={() => props.setPrompt(value)}>{label}</button>)}
+      </div>
+      <div className="focus-input-wrap">
+        <textarea
+          value={props.prompt}
+          onChange={(event) => props.setPrompt(event.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="向当前会话发送指令...  ⌘↵ 发送"
+        />
+        <button type="button" className="focus-send" onClick={props.onPrompt} disabled={!props.session || !props.prompt.trim()}>发送</button>
+      </div>
+      <div className="focus-command-hints">
+        <span><kbd>⌘↵</kbd> 发送</span>
+        <span><kbd>⇧⌘R</kbd> 只读</span>
+        <span><kbd>⌘K</kbd> 命令</span>
+        <strong>写文件 / 执行命令前会二次确认</strong>
+        <button type="button" onClick={props.onNewSession}>新会话</button>
+        <button type="button" onClick={props.onContinue} disabled={!props.session}>继续</button>
+        <button type="button" className="danger" onClick={props.onStop} disabled={!props.session}>停止</button>
+        <button type="button" data-testid="delete-session" className="danger solid" onClick={props.onDelete} disabled={!props.session}>删除</button>
+      </div>
+    </footer>
+  );
+}
+
+function FocusInspector(props: {
+  app?: AppInfo;
+  session?: Session;
+  usage?: TokenUsage;
+  confirmations: Confirmation[];
+  events: EventRecord[];
+  frames: TerminalFrame[];
+  onResolve(id: string, approved: boolean): void;
+  onExport(): void;
+}) {
+  const session = props.session;
+  const app = props.app;
+  const files = changedFilesFromFrames(props.frames);
+  return (
+    <aside className="focus-inspector">
+      <section>
+        <h2>会话信息</h2>
+        <InfoRow label="App" value={session ? appLabel(session.appId) : app?.label ?? '-'} />
+        <InfoRow label="模型" value={session?.model ?? 'model pending'} />
+        <InfoRow label="计费" value={app ? billingModeTitle(app.billingMode) : '-'} />
+        <InfoRow label="状态" value={statusLabel(session?.status)} />
+        <InfoRow label="耗时" value={session ? formatDuration(sessionDurationMs(session)) : '-'} />
+        <InfoRow label="Token" value={session ? formatTokenCount(session.totalTokens) : formatTokenCount(props.usage?.totalTokens ?? 0)} />
+      </section>
+      <section>
+        <h2>连接状态</h2>
+        <InfoRow label="命令" value={app?.command ?? app?.message ?? '-'} />
+        <InfoRow label="输入" value={formatTokenCount(session?.inputTokens ?? props.usage?.inputTokens ?? 0)} />
+        <InfoRow label="输出" value={formatTokenCount(session?.outputTokens ?? props.usage?.outputTokens ?? 0)} />
+      </section>
+      <section>
+        <h2>改动文件 · {files.length}</h2>
+        <div className="focus-file-list">
+          {files.slice(0, 6).map((file) => <span key={file}>{file}</span>)}
+          {!files.length && <em>最近历史中没有文件改动记录</em>}
+        </div>
+      </section>
+      {!!props.confirmations.length && (
+        <section>
+          <h2>确认队列</h2>
+          <div className="focus-confirmations">
+            {props.confirmations.map((item) => (
+              <div key={item.id}>
+                <strong>{item.reason}</strong>
+                <span><button type="button" onClick={() => props.onResolve(item.id, true)}>确认</button><button type="button" onClick={() => props.onResolve(item.id, false)}>拒绝</button></span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </aside>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return <div className="focus-info-row"><span>{label}</span><strong title={value}>{value}</strong></div>;
+}
+
+function focusTabs(sessions: Session[], selected?: Session): Session[] {
+  const picked = new Map<string, Session>();
+  if (selected) picked.set(selected.id, selected);
+  for (const session of sessions.filter((item) => item.live || item.status === 'running')) {
+    if (picked.size >= 3) break;
+    picked.set(session.id, session);
+  }
+  for (const appId of appOrder) {
+    const session = sessions.find((item) => item.appId === appId);
+    if (session && picked.size < 4) picked.set(session.id, session);
+  }
+  return Array.from(picked.values()).slice(0, 4);
+}
+
+function filteredSessions(sessions: Session[], appId: AppId, filter: SessionFilter, query: string): Session[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  return sessions
+    .filter((session) => session.appId === appId)
+    .filter((session) => {
+      if (filter === 'running') return session.live || session.status === 'running';
+      if (filter === 'history') return session.status !== 'running' && !session.live;
+      return true;
+    })
+    .filter((session) => {
+      if (!normalizedQuery) return true;
+      return [session.title, session.cwd, session.model, session.id].some((value) => value?.toLowerCase().includes(normalizedQuery));
+    });
+}
+
+function statusLabel(status?: string): string {
+  if (!status) return '-';
+  if (status === 'running') return '进行中';
+  if (status === 'completed') return '完成';
+  if (status === 'stopped') return '停止';
+  if (status === 'pending') return '队列';
+  return '中断';
+}
+
+function changedFilesFromFrames(frames: TerminalFrame[]): string[] {
+  const text = frames.map((frame) => frame.text).join('\n');
+  const matches = text.match(/(?:^|[\s"'`])((?:src|tests|test|app|server|client|packages|ui_kits)\/[^\s"'`:,;)\]]+)/g) ?? [];
+  const files = matches
+    .map((match) => match.trim().replace(/^["'`]/, ''))
+    .map((path) => path.replace(/[.,;:)\]]+$/, ''))
+    .filter((path) => path.includes('/'));
+  return Array.from(new Set(files)).slice(0, 12);
 }
 
 function Sidebar({
@@ -718,12 +1277,61 @@ function writeWorkspaceSplit(leftPercent: number) {
   }
 }
 
+function readFocusLayout(): FocusLayout {
+  if (typeof window === 'undefined') return { left: DEFAULT_FOCUS_LEFT_WIDTH, right: DEFAULT_FOCUS_RIGHT_WIDTH };
+  try {
+    const raw = window.localStorage.getItem(FOCUS_LAYOUT_STORAGE_KEY);
+    if (!raw) return { left: DEFAULT_FOCUS_LEFT_WIDTH, right: DEFAULT_FOCUS_RIGHT_WIDTH };
+    const value = JSON.parse(raw) as Partial<FocusLayout>;
+    return {
+      left: clamp(Number(value.left), FOCUS_MIN_LEFT_WIDTH, FOCUS_MAX_LEFT_WIDTH) || DEFAULT_FOCUS_LEFT_WIDTH,
+      right: clamp(Number(value.right), FOCUS_MIN_RIGHT_WIDTH, FOCUS_MAX_RIGHT_WIDTH) || DEFAULT_FOCUS_RIGHT_WIDTH
+    };
+  } catch {
+    return { left: DEFAULT_FOCUS_LEFT_WIDTH, right: DEFAULT_FOCUS_RIGHT_WIDTH };
+  }
+}
+
+function writeFocusLayout(layout: FocusLayout): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(FOCUS_LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+  } catch {
+    // Layout persistence is optional; dragging should keep working in memory.
+  }
+}
+
+function readThemeMode(): ThemeMode {
+  if (typeof window === 'undefined') return 'light';
+  try {
+    const value = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return value === 'dark' || value === 'light' ? value : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function writeThemeMode(theme: ThemeMode): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Theme persistence is optional; the in-memory toggle still applies.
+  }
+}
+
+function applyThemeMode(theme: ThemeMode): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
 function TokenTrend({ usage, series, scope }: { usage: TokenUsage[]; series: UsagePoint[]; scope: TimeScope }) {
-  const max = Math.max(1, ...series.flatMap((point) => [point.codex, point.claude, point.antigravity]));
+  const max = Math.max(1, ...series.flatMap((point) => appOrder.map((appId) => point[appId] ?? 0)));
   const paths = useMemo(() => appOrder.map((appId) => makePath(series.map((point) => point[appId]), max)), [series, max]);
   return (
     <section className="card panel">
@@ -891,6 +1499,7 @@ interface ConversationTurn {
   text: string;
   createdAt: string;
   live: boolean;
+  cwd?: string;
 }
 
 function TerminalConversation(props: {
@@ -905,7 +1514,7 @@ function TerminalConversation(props: {
   const [expandedToolTurns, setExpandedToolTurns] = useState<Set<string>>(() => new Set());
   const [expandedConversationTurns, setExpandedConversationTurns] = useState<Set<string>>(() => new Set());
   const appId = props.session?.appId ?? props.frames[0]?.appId ?? 'codex';
-  const turns = useMemo(() => framesToConversationTurns(props.frames, appId), [appId, props.frames]);
+  const turns = useMemo(() => framesToConversationTurns(props.frames, appId, props.session?.cwd), [appId, props.frames, props.session?.cwd]);
   const hasUserTurn = turns.some((turn) => turn.role === 'user');
   const displayTurns = hasUserTurn || !turns.length ? turns : [syntheticUserContextTurn(props.session, appId), ...turns];
   const firstFrameKey = props.frames[0] ? frameKey(props.frames[0]) : '';
@@ -993,45 +1602,56 @@ function TerminalConversation(props: {
 }
 
 function ToolTurn(props: { turn: ConversationTurn; expanded: boolean; onToggle(): void }) {
+  const [showRaw, setShowRaw] = useState(false);
+  const presentation = toolPresentation(props.turn.text);
   return (
     <div className="tool-turn">
       <button type="button" className="tool-summary" onClick={props.onToggle} aria-expanded={props.expanded}>
         <span>{props.expanded ? '▾' : '▸'}</span>
-        <strong>{toolSummary(props.turn.text)}</strong>
+        <strong>{presentation.summary}</strong>
         <em>{props.expanded ? '收起详情' : '展开详情'}</em>
       </button>
-      {props.expanded && <pre>{props.turn.text}</pre>}
+      {props.expanded && (
+        <div className="tool-detail">
+          <pre>{showRaw ? presentation.rawText : presentation.cleanText}</pre>
+          {presentation.hasFilteredNoise && (
+            <button type="button" className="tool-raw-toggle" onClick={() => setShowRaw((value) => !value)}>
+              {showRaw ? '查看清洗输出' : '显示原始输出'}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 function ConversationMessageTurn(props: { turn: ConversationTurn; expanded: boolean; onToggle(): void }) {
   const presentation = conversationPresentation(props.turn);
-  const showToggle = presentation.hasHiddenContext || presentation.long;
+  const showToggle = props.expanded || presentation.hasHiddenContext || presentation.long;
   const visibleText = props.expanded ? presentation.fullText : presentation.previewText;
   const structured = props.turn.role === 'assistant';
   return (
     <div className={`message-turn ${props.turn.role}`}>
       {presentation.badge && <div className="message-badge">{presentation.badge}</div>}
       <div className={`message-text ${structured ? 'agent-reply-body markdown-body' : ''}`}>
-        {structured ? <AgentReplyContent text={visibleText} appId={props.turn.appId} /> : <PlainMessageText text={visibleText} turnId={props.turn.id} />}
+        {structured ? <AgentReplyContent text={visibleText} appId={props.turn.appId} cwd={props.turn.cwd} /> : <PlainMessageText text={visibleText} turnId={props.turn.id} cwd={props.turn.cwd} />}
       </div>
       {showToggle && (
-        <button type="button" className="message-toggle" onClick={props.onToggle}>
-          {props.expanded ? '收起上下文' : presentation.hasHiddenContext ? '展开浏览器上下文和原文' : '展开完整回复'}
+        <button type="button" className="message-toggle" onClick={props.onToggle} aria-expanded={props.expanded}>
+          {props.expanded ? '收起' : presentation.hasHiddenContext ? '展开浏览器上下文和原文' : '展开完整回复'}
         </button>
       )}
     </div>
   );
 }
 
-function AgentReplyContent({ text, appId }: { text: string; appId: AppId }) {
+function AgentReplyContent({ text, appId, cwd }: { text: string; appId: AppId; cwd?: string }) {
   const segments = parseAgentReplySegments(text);
   return (
     <>
       {segments.map((segment, index) => {
-        if (segment.type === 'tag') return <AgentFormatCard key={index} tag={segment.tag} text={segment.text} appId={appId} />;
-        return <MarkdownContent key={index} text={segment.text} />;
+        if (segment.type === 'tag') return <AgentFormatCard key={index} tag={segment.tag} text={segment.text} appId={appId} cwd={cwd} />;
+        return <MarkdownContent key={index} text={segment.text} cwd={cwd} />;
       })}
     </>
   );
@@ -1067,7 +1687,7 @@ function parseAgentReplySegments(text: string): AgentReplySegment[] {
   return segments.length ? segments : [{ type: 'markdown', text }];
 }
 
-function AgentFormatCard({ tag, text, appId }: { tag: AgentReplyTag; text: string; appId: AppId }) {
+function AgentFormatCard({ tag, text, appId, cwd }: { tag: AgentReplyTag; text: string; appId: AppId; cwd?: string }) {
   const meta = agentFormatMeta(tag);
   return (
     <section className={`agent-format-card ${meta.tone} ${appId}`} data-testid={`agent-format-${tag}`}>
@@ -1077,7 +1697,7 @@ function AgentFormatCard({ tag, text, appId }: { tag: AgentReplyTag; text: strin
         <code>{`<${tag}>`}</code>
       </header>
       <div className="agent-format-body">
-        <MarkdownContent text={text || meta.emptyText} />
+        <MarkdownContent text={text || meta.emptyText} cwd={cwd} />
       </div>
     </section>
   );
@@ -1092,20 +1712,26 @@ function agentFormatMeta(tag: AgentReplyTag): { label: string; icon: string; ton
   return { label: '系统提醒', icon: '#', tone: 'system', emptyText: '系统提醒为空。' };
 }
 
-function PlainMessageText({ text, turnId }: { text: string; turnId: string }) {
+function PlainMessageText({ text, turnId, cwd }: { text: string; turnId: string; cwd?: string }) {
   return (
     <>
       {text.split('\n').map((line, index) => {
         const key = `${turnId}-${index}`;
         if (!line.trim()) return <span className="message-break" key={key} />;
-        return <p key={key}>{line}</p>;
+        const images = extractLooseImageRefs(line, cwd);
+        return (
+          <div className="plain-message-line" key={key}>
+            <p>{line}</p>
+            <ImagePreviewList images={images} />
+          </div>
+        );
       })}
     </>
   );
 }
 
-function MarkdownContent({ text }: { text: string }) {
-  return <>{parseMarkdownBlocks(text).map((block, index) => renderMarkdownBlock(block, index))}</>;
+function MarkdownContent({ text, cwd }: { text: string; cwd?: string }) {
+  return <>{parseMarkdownBlocks(text).map((block, index) => renderMarkdownBlock(block, index, cwd))}</>;
 }
 
 type MarkdownBlock =
@@ -1248,18 +1874,24 @@ function splitMarkdownTableRow(line: string): string[] {
     .map((cell) => cell.trim());
 }
 
-function renderMarkdownBlock(block: MarkdownBlock, index: number): ReactNode {
+function renderMarkdownBlock(block: MarkdownBlock, index: number, cwd?: string): ReactNode {
   if (block.type === 'paragraph') {
-    return <p key={index}>{renderInlineMarkdown(block.text, `${index}`)}</p>;
+    const images = extractLooseImageRefs(block.text, cwd);
+    return (
+      <div className="markdown-paragraph" key={index}>
+        <p>{renderInlineMarkdown(block.text, `${index}`, cwd)}</p>
+        <ImagePreviewList images={images} />
+      </div>
+    );
   }
   if (block.type === 'heading') {
-    return renderMarkdownHeading(block.level, block.text, index);
+    return renderMarkdownHeading(block.level, block.text, index, cwd);
   }
   if (block.type === 'ul') {
-    return <ul key={index}>{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `${index}-${itemIndex}`)}</li>)}</ul>;
+    return <ul key={index}>{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `${index}-${itemIndex}`, cwd)}</li>)}</ul>;
   }
   if (block.type === 'ol') {
-    return <ol key={index}>{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `${index}-${itemIndex}`)}</li>)}</ol>;
+    return <ol key={index}>{block.items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `${index}-${itemIndex}`, cwd)}</li>)}</ol>;
   }
   if (block.type === 'checklist') {
     return (
@@ -1267,14 +1899,14 @@ function renderMarkdownBlock(block: MarkdownBlock, index: number): ReactNode {
         {block.items.map((item, itemIndex) => (
           <li key={itemIndex}>
             <input type="checkbox" checked={item.checked} readOnly aria-label={item.checked ? '已完成' : '未完成'} />
-            <span>{renderInlineMarkdown(item.text, `${index}-${itemIndex}`)}</span>
+            <span>{renderInlineMarkdown(item.text, `${index}-${itemIndex}`, cwd)}</span>
           </li>
         ))}
       </ul>
     );
   }
   if (block.type === 'quote') {
-    return renderMarkdownQuote(block.text, index);
+    return renderMarkdownQuote(block.text, index, cwd);
   }
   if (block.type === 'code') {
     return <CodeBlock key={index} lang={block.lang} text={block.text} />;
@@ -1285,8 +1917,8 @@ function renderMarkdownBlock(block: MarkdownBlock, index: number): ReactNode {
   return (
     <div className="markdown-table-scroll" key={index}>
       <table className="markdown-table">
-        <thead><tr>{block.headers.map((header: string, headerIndex: number) => <th key={headerIndex}>{renderInlineMarkdown(header, `${index}-h-${headerIndex}`)}</th>)}</tr></thead>
-        <tbody>{block.rows.map((row: string[], rowIndex: number) => <tr key={rowIndex}>{block.headers.map((_: string, cellIndex: number) => <td key={cellIndex}>{renderInlineMarkdown(row[cellIndex] ?? '', `${index}-${rowIndex}-${cellIndex}`)}</td>)}</tr>)}</tbody>
+        <thead><tr>{block.headers.map((header: string, headerIndex: number) => <th key={headerIndex}>{renderInlineMarkdown(header, `${index}-h-${headerIndex}`, cwd)}</th>)}</tr></thead>
+        <tbody>{block.rows.map((row: string[], rowIndex: number) => <tr key={rowIndex}>{block.headers.map((_: string, cellIndex: number) => <td key={cellIndex}>{renderInlineMarkdown(row[cellIndex] ?? '', `${index}-${rowIndex}-${cellIndex}`, cwd)}</td>)}</tr>)}</tbody>
       </table>
     </div>
   );
@@ -1301,7 +1933,7 @@ function CodeBlock({ lang, text }: { lang?: string; text: string }) {
   );
 }
 
-function renderMarkdownQuote(text: string, index: number): ReactNode {
+function renderMarkdownQuote(text: string, index: number, cwd?: string): ReactNode {
   const alert = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n?([\s\S]*)$/i.exec(text.trim());
   if (alert) {
     const kind = alert[1].toLowerCase();
@@ -1309,11 +1941,11 @@ function renderMarkdownQuote(text: string, index: number): ReactNode {
     return (
       <aside className={`markdown-alert ${kind}`} key={index}>
         <strong>{markdownAlertLabel(kind)}</strong>
-        <div>{parseMarkdownBlocks(body).map((child, childIndex) => renderMarkdownBlock(child, childIndex))}</div>
+        <div>{parseMarkdownBlocks(body).map((child, childIndex) => renderMarkdownBlock(child, childIndex, cwd))}</div>
       </aside>
     );
   }
-  return <blockquote key={index}>{parseMarkdownBlocks(text).map((child, childIndex) => renderMarkdownBlock(child, childIndex))}</blockquote>;
+  return <blockquote key={index}>{parseMarkdownBlocks(text).map((child, childIndex) => renderMarkdownBlock(child, childIndex, cwd))}</blockquote>;
 }
 
 function markdownAlertLabel(kind: string): string {
@@ -1324,8 +1956,8 @@ function markdownAlertLabel(kind: string): string {
   return '说明';
 }
 
-function renderMarkdownHeading(level: number, text: string, key: number): ReactNode {
-  const children = renderInlineMarkdown(text, `${key}`);
+function renderMarkdownHeading(level: number, text: string, key: number, cwd?: string): ReactNode {
+  const children = renderInlineMarkdown(text, `${key}`, cwd);
   if (level === 1) return <h1 key={key}>{children}</h1>;
   if (level === 2) return <h2 key={key}>{children}</h2>;
   if (level === 3) return <h3 key={key}>{children}</h3>;
@@ -1334,9 +1966,9 @@ function renderMarkdownHeading(level: number, text: string, key: number): ReactN
   return <h6 key={key}>{children}</h6>;
 }
 
-function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
+function renderInlineMarkdown(text: string, keyPrefix: string, cwd?: string): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[\s\S]+?\*\*|__[\s\S]+?__|\*[^*\n]+\*|_[^_\n]+_|\[[^\]\n]+\]\([^) \n]+(?:\s+"[^"]*")?\))/g;
+  const pattern = /(!\[[^\]\n]*\]\([^) \n]+(?:\s+"[^"]*")?\)|`[^`]+`|\*\*[\s\S]+?\*\*|__[\s\S]+?__|\*[^*\n]+\*|_[^_\n]+_|\[[^\]\n]+\]\([^) \n]+(?:\s+"[^"]*")?\))/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -1344,16 +1976,19 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
     if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
     const token = match[0];
     const key = `${keyPrefix}-${match.index}`;
-    if (token.startsWith('`')) {
+    if (token.startsWith('![')) {
+      const image = markdownImageFromToken(token, cwd);
+      nodes.push(image ? <MessageImage key={key} image={image} /> : token);
+    } else if (token.startsWith('`')) {
       nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
     } else if (token.startsWith('**') || token.startsWith('__')) {
-      nodes.push(<strong key={key}>{renderInlineMarkdown(token.slice(2, -2), key)}</strong>);
+      nodes.push(<strong key={key}>{renderInlineMarkdown(token.slice(2, -2), key, cwd)}</strong>);
     } else if (token.startsWith('*') || token.startsWith('_')) {
-      nodes.push(<em key={key}>{renderInlineMarkdown(token.slice(1, -1), key)}</em>);
+      nodes.push(<em key={key}>{renderInlineMarkdown(token.slice(1, -1), key, cwd)}</em>);
     } else {
       const link = /^\[([^\]\n]+)\]\(([^) \n]+)(?:\s+"[^"]*")?\)$/.exec(token);
       const href = link ? safeMarkdownHref(link[2]) : undefined;
-      nodes.push(href ? <a key={key} href={href} target="_blank" rel="noreferrer">{renderInlineMarkdown(link![1], key)}</a> : token);
+      nodes.push(href ? <a key={key} href={href} target="_blank" rel="noreferrer">{renderInlineMarkdown(link![1], key, cwd)}</a> : token);
     }
     lastIndex = pattern.lastIndex;
   }
@@ -1368,6 +2003,108 @@ function safeMarkdownHref(href: string): string | undefined {
   return undefined;
 }
 
+interface MessageImageRef {
+  raw: string;
+  src: string;
+  alt: string;
+  label: string;
+}
+
+function ImagePreviewList({ images }: { images: MessageImageRef[] }) {
+  if (!images.length) return null;
+  return (
+    <div className="message-image-list">
+      {images.map((image) => <MessageImage key={`${image.raw}-${image.src}`} image={image} />)}
+    </div>
+  );
+}
+
+function MessageImage({ image }: { image: MessageImageRef }) {
+  return (
+    <span className="message-image-card">
+      <a href={image.src} target="_blank" rel="noreferrer" title={image.raw}>
+        <img src={image.src} alt={image.alt} loading="lazy" />
+      </a>
+      <span>{image.label}</span>
+    </span>
+  );
+}
+
+function markdownImageFromToken(token: string, cwd?: string): MessageImageRef | undefined {
+  const match = /^!\[([^\]\n]*)\]\(([^) \n]+)(?:\s+"[^"]*")?\)$/.exec(token);
+  if (!match) return undefined;
+  return createMessageImageRef(match[2], cwd, match[1] || 'image');
+}
+
+function extractLooseImageRefs(text: string, cwd?: string): MessageImageRef[] {
+  const candidates: string[] = [];
+  const withoutMarkdownImages = text.replace(/!\[[^\]\n]*\]\([^)]+\)/g, ' ');
+  const tagPattern = /<(?:output-file|input-file|image|image_path|imagePath|file_path|filePath|path|url)>\s*([^<>]+?)\s*<\/(?:output-file|input-file|image|image_path|imagePath|file_path|filePath|path|url)>/gi;
+  const bracketPattern = /\[\[([^\]]+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#][^\]]*)?)\]\]/gi;
+  const markdownLinkPathPattern = /\[[^\]\n]+\]\(([^) \n]+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#][^) \n]*)?)\)/gi;
+  const loosePathPattern = /(?:file:\/\/\/[^\s<>"')\]]+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#][^\s<>"')\]]*)?|\/[^\s<>"')\]]+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#][^\s<>"')\]]*)?|(?:\.{1,2}\/|[\w\u3400-\u9fff][^\s<>"')\]]*\/)[^\s<>"')\]]+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#][^\s<>"')\]]*)?)/gi;
+
+  collectPatternCandidates(withoutMarkdownImages, tagPattern, candidates);
+  collectPatternCandidates(withoutMarkdownImages, bracketPattern, candidates);
+  collectPatternCandidates(withoutMarkdownImages, markdownLinkPathPattern, candidates);
+  collectPatternCandidates(withoutMarkdownImages, loosePathPattern, candidates);
+
+  const unique = new Map<string, MessageImageRef>();
+  for (const candidate of candidates) {
+    const image = createMessageImageRef(candidate, cwd);
+    if (image && !unique.has(image.raw)) unique.set(image.raw, image);
+  }
+  return [...unique.values()].slice(0, 6);
+}
+
+function collectPatternCandidates(text: string, pattern: RegExp, candidates: string[]): void {
+  for (const match of text.matchAll(pattern)) {
+    const value = match[1] ?? match[0];
+    if (value) candidates.push(value);
+  }
+}
+
+function createMessageImageRef(rawValue: string, cwd?: string, alt = 'image'): MessageImageRef | undefined {
+  const raw = normalizeImageReference(rawValue);
+  if (!raw || !looksLikeDisplayableImage(raw)) return undefined;
+  const src = imageReferenceSrc(raw, cwd);
+  if (!src) return undefined;
+  return {
+    raw,
+    src,
+    alt,
+    label: imageReferenceLabel(raw)
+  };
+}
+
+function imageReferenceSrc(raw: string, cwd?: string): string | undefined {
+  if (/^data:image\//i.test(raw) || /^https?:\/\//i.test(raw)) return raw;
+  const params = new URLSearchParams({ path: raw });
+  if (cwd) params.set('cwd', cwd);
+  return `/api/assets/image?${params.toString()}`;
+}
+
+function normalizeImageReference(value: string): string {
+  return value
+    .trim()
+    .replace(/^["'`<]+|["'`>,，。；;:：]+$/g, '')
+    .replace(/^\[\[|\]\]$/g, '')
+    .trim();
+}
+
+function looksLikeDisplayableImage(value: string): boolean {
+  if (/^data:image\//i.test(value)) return true;
+  if (/^https?:\/\//i.test(value)) return true;
+  return /\.(?:png|jpe?g|gif|webp|bmp|svg)(?:[?#].*)?$/i.test(value);
+}
+
+function imageReferenceLabel(value: string): string {
+  if (/^data:image\//i.test(value)) return 'inline image';
+  const path = value.replace(/^file:\/\//i, '').split(/[?#]/)[0] ?? value;
+  const name = path.split('/').filter(Boolean).pop() ?? 'image';
+  return name.length > 42 ? `${name.slice(0, 18)}...${name.slice(-18)}` : name;
+}
+
 function syntheticUserContextTurn(session: Session | undefined, appId: AppId): ConversationTurn {
   return {
     id: `${session?.id ?? appId}-synthetic-user-context`,
@@ -1375,7 +2112,8 @@ function syntheticUserContextTurn(session: Session | undefined, appId: AppId): C
     role: 'user',
     text: `最近一屏历史尚未包含原始用户输入。继续翻页可加载更早的 user prompt。\n当前会话：${session?.title ?? appLabel(appId)}`,
     createdAt: session?.updatedAt ?? new Date().toISOString(),
-    live: false
+    live: false,
+    cwd: session?.cwd
   };
 }
 
@@ -1461,19 +2199,35 @@ function clipMessagePreview(text: string, limit: number): string {
   return `${text.slice(0, limit).trimEnd()}\n...`;
 }
 
-function toolSummary(text: string): string {
-  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
-  const command = extractToolCommand(text, lines);
+function toolPresentation(text: string): { summary: string; cleanText: string; rawText: string; hasFilteredNoise: boolean } {
+  const rawText = cleanTerminalText(text) || text.trim() || '无输出';
+  const rawLines = rawText.split('\n').map((line) => line.trim()).filter(Boolean);
+  const visibleLines = rawLines.filter((line) => !isNoisyTerminalLine(line) && !isNoisyToolUiLine(line));
+  const command = extractToolCommand(rawText, rawLines);
+  const cleanText = visibleLines.length ? visibleLines.join('\n') : fallbackToolText(rawLines);
   const exitCode = /Process exited with code\s+(-?\d+)/i.exec(text)?.[1];
   const wallTime = /Wall time:\s*([^\n]+)/i.exec(text)?.[1]?.trim();
   const tokens = /Original token count:\s*([^\n]+)/i.exec(text)?.[1]?.trim();
-  const label = command ? `命令：${command}` : cleanToolLine(lines[0] ?? '工具调用');
+  const firstVisible = visibleLines.find((line) => !/^[$>#|]/.test(line)) ?? visibleLines[0];
+  const label = command ? `命令：${command}` : firstVisible ? cleanToolLine(firstVisible) : '终端界面状态输出';
   const meta = [
     exitCode ? `code ${exitCode}` : '',
     wallTime ? wallTime.replace(/\s*seconds?/i, 's') : '',
     tokens ? `${tokens} token` : ''
   ].filter(Boolean);
-  return clipInlineText(meta.length ? `${label} · ${meta.join(' · ')}` : label, 118);
+  return {
+    summary: clipInlineText(meta.length ? `${label} · ${meta.join(' · ')}` : label, 118),
+    cleanText,
+    rawText,
+    hasFilteredNoise: visibleLines.length !== rawLines.length
+  };
+}
+
+function fallbackToolText(lines: string[]): string {
+  if (lines.some((line) => /Claude Code v|Tips for getting started|Welcome back!/i.test(line))) {
+    return '已隐藏 Claude Code TUI 状态栏和欢迎横幅。';
+  }
+  return lines.length ? lines.slice(0, 12).join('\n') : '无可展示的工具输出。';
 }
 
 function extractToolCommand(text: string, lines: string[]): string | undefined {
@@ -1501,14 +2255,37 @@ function cleanToolLine(line: string): string {
     .replace(/^write_stdin$/i, '继续读取输出');
 }
 
+function isNoisyToolUiLine(line: string): boolean {
+  const normalized = line.replace(/[─━│┃┌┐└┘╭╮╰╯═║╔╗╚╝┬┴├┤┼]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!normalized) return true;
+  return (
+    /Claude Code v\d/i.test(normalized) ||
+    /Tips for getting started/i.test(normalized) ||
+    /Welcome back!/i.test(normalized) ||
+    /Run \/init to create/i.test(normalized) ||
+    /What's new/i.test(normalized) ||
+    /Bug fixes and reliabilit/i.test(normalized) ||
+    /fallbackModel/i.test(normalized) ||
+    /Added glob pattern suppo/i.test(normalized) ||
+    /API Usage Billing/i.test(normalized) ||
+    /\/release-notes/i.test(normalized) ||
+    /Try "fix lint errors"/i.test(normalized) ||
+    /^for agents$/i.test(normalized) ||
+    /tmux detected/i.test(normalized) ||
+    /scroll with PgUp\/PgDn/i.test(normalized) ||
+    /focus-events/i.test(normalized) ||
+    /^# .+ @ .+ in .+ on git:/i.test(normalized)
+  );
+}
+
 function clipInlineText(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
 }
 
-function framesToConversationTurns(frames: TerminalFrame[], fallbackAppId: AppId): ConversationTurn[] {
+function framesToConversationTurns(frames: TerminalFrame[], fallbackAppId: AppId, cwd?: string): ConversationTurn[] {
   const turns: ConversationTurn[] = [];
   frames.forEach((frame, frameIndex) => {
-    const items = frameToConversationItems(frame, fallbackAppId);
+    const items = frameToConversationItems(frame, fallbackAppId, cwd);
     items.forEach((item, itemIndex) => {
       const previous = turns[turns.length - 1];
       if (previous && previous.role === item.role && previous.live === item.live && previous.appId === item.appId) {
@@ -1522,18 +2299,18 @@ function framesToConversationTurns(frames: TerminalFrame[], fallbackAppId: AppId
   return turns;
 }
 
-function frameToConversationItems(frame: TerminalFrame, fallbackAppId: AppId): Array<Omit<ConversationTurn, 'id'>> {
+function frameToConversationItems(frame: TerminalFrame, fallbackAppId: AppId, cwd?: string): Array<Omit<ConversationTurn, 'id'>> {
   const parsed = frame.text
     .split('\n')
-    .flatMap((line) => conversationItemsFromJsonLine(line, frame, fallbackAppId));
+    .flatMap((line) => conversationItemsFromJsonLine(line, frame, fallbackAppId, cwd));
   if (parsed.length) return parsed;
 
   const cleaned = cleanTerminalText(frame.text);
   if (!cleaned) return [];
-  return prefixedLinesToConversationItems(cleaned.split('\n'), frame, fallbackAppId, frame.stream !== 'system');
+  return prefixedLinesToConversationItems(cleaned.split('\n'), frame, fallbackAppId, frame.stream !== 'system', cwd);
 }
 
-function conversationItemsFromJsonLine(line: string, frame: TerminalFrame, fallbackAppId: AppId): Array<Omit<ConversationTurn, 'id'>> {
+function conversationItemsFromJsonLine(line: string, frame: TerminalFrame, fallbackAppId: AppId, cwd?: string): Array<Omit<ConversationTurn, 'id'>> {
   const trimmed = line.trim();
   if (!trimmed.startsWith('{')) return [];
   try {
@@ -1541,22 +2318,22 @@ function conversationItemsFromJsonLine(line: string, frame: TerminalFrame, fallb
     if (value.type === 'history.message') {
       const role = normalizeConversationRole(String(value.role ?? frame.stream));
       const text = clipConversationText(cleanTerminalText(String(value.text ?? '')), role);
-      return text ? [{ appId: frame.appId ?? fallbackAppId, role, text, createdAt: frame.createdAt, live: false }] : [];
+      return text ? [{ appId: frame.appId ?? fallbackAppId, role, text, createdAt: frame.createdAt, live: false, cwd }] : [];
     }
-    return prefixedLinesToConversationItems(displayFromJson(value), frame, fallbackAppId, true);
+    return prefixedLinesToConversationItems(displayFromJson(value), frame, fallbackAppId, true, cwd);
   } catch {
     return [];
   }
 }
 
-function prefixedLinesToConversationItems(lines: string[], frame: TerminalFrame, fallbackAppId: AppId, live: boolean): Array<Omit<ConversationTurn, 'id'>> {
+function prefixedLinesToConversationItems(lines: string[], frame: TerminalFrame, fallbackAppId: AppId, live: boolean, cwd?: string): Array<Omit<ConversationTurn, 'id'>> {
   const items: Array<Omit<ConversationTurn, 'id'>> = [];
   for (const line of lines) {
-    if (isNoisyTerminalLine(line)) continue;
+    if (isNoisyTerminalLine(line) || isNoisyToolUiLine(line)) continue;
     const match = /^(assistant|user|tool|system|error|output|token|event|stdout|stderr)> ?([\s\S]*)$/i.exec(line);
     const role = normalizeConversationRole(match?.[1] ?? frame.stream);
     const text = clipConversationText(cleanTerminalText(match?.[2] ?? line), role);
-    if (text) items.push({ appId: frame.appId ?? fallbackAppId, role, text, createdAt: frame.createdAt, live });
+    if (text) items.push({ appId: frame.appId ?? fallbackAppId, role, text, createdAt: frame.createdAt, live, cwd });
   }
   return items;
 }
@@ -1582,7 +2359,13 @@ function roleLabel(appId: AppId, role: ConversationRole): string {
 
 function roleMarker(appId: AppId, role: ConversationRole): string {
   if (role === 'user') return '>';
-  if (role === 'assistant') return appId === 'codex' ? 'codex' : appId === 'claude' ? 'claude' : 'agy';
+  if (role === 'assistant') {
+    if (appId === 'codex') return 'codex';
+    if (appId === 'claude') return 'claude';
+    if (appId === 'antigravity') return 'agy';
+    if (appId === 'oh-my-pi') return 'pi';
+    return 'open';
+  }
   if (role === 'tool') return '$';
   if (role === 'error') return '!';
   if (role === 'system') return '#';
@@ -1593,6 +2376,161 @@ function clipConversationText(text: string, role: ConversationRole): string {
   const limit = role === 'tool' || role === 'output' ? 1200 : 2200;
   if (text.length <= limit) return text;
   return `${text.slice(0, limit).trimEnd()}\n... 已截断；继续翻页或查看原始 CLI 日志获取完整输出。`;
+}
+
+function NewSessionDialog(props: { apps: AppInfo[]; selectedApp: AppId; onClose(): void; onCreate(appId: AppId): Promise<void> }) {
+  const [busyApp, setBusyApp] = useState<AppId>();
+  const [error, setError] = useState<string>();
+
+  async function handleCreate(appId: AppId) {
+    setBusyApp(appId);
+    setError(undefined);
+    try {
+      await props.onCreate(appId);
+      props.onClose();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusyApp(undefined);
+    }
+  }
+
+  return (
+    <div className="focus-dialog-backdrop" role="presentation" onClick={props.onClose}>
+      <section className="focus-dialog focus-new-session" role="dialog" aria-modal="true" aria-labelledby="new-session-title" onClick={(event) => event.stopPropagation()}>
+        <header>
+          <div>
+            <h2 id="new-session-title">新建会话 · 选择 App</h2>
+            <p>选择要启动的 CLI，工作台会通过本地 launcher 建立真实会话。</p>
+          </div>
+          <button type="button" className="focus-dialog-close" onClick={props.onClose} aria-label="关闭">×</button>
+        </header>
+        <div className="focus-app-choices">
+          {appOrder.map((appId) => {
+            const app = props.apps.find((item) => item.appId === appId);
+            const connected = app?.status === 'connected';
+            return (
+              <button
+                type="button"
+                key={appId}
+                className={`focus-app-choice ${props.selectedApp === appId ? 'active' : ''}`}
+                onClick={() => handleCreate(appId)}
+                disabled={Boolean(busyApp) || !connected}
+              >
+                <span className={`logo ${appId}`}>{appInitials(appId)}</span>
+                <strong>{appLabel(appId)}</strong>
+                <em>{app?.command ?? app?.message ?? '未配置命令'}</em>
+                <b>{busyApp === appId ? '启动中' : connected ? '选择' : statusText(app?.status ?? 'missing')}</b>
+              </button>
+            );
+          })}
+        </div>
+        {error && <p className="focus-dialog-error">{error}</p>}
+        <footer>也可在 <kbd>⌘K</kbd> 命令面板中新建</footer>
+      </section>
+    </div>
+  );
+}
+
+type TokenDialogScope = TimeScope | 'all';
+
+function TokenUsageDialog(props: { usage: TokenUsage[]; scope: TimeScope; setScope(scope: TimeScope): void; onClose(): void }) {
+  const [activeScope, setActiveScope] = useState<TokenDialogScope>(props.scope);
+  const [usageByScope, setUsageByScope] = useState<Partial<Record<TimeScope, TokenUsage[]>>>({ [props.scope]: props.usage });
+
+  useEffect(() => {
+    let cancelled = false;
+    setUsageByScope((current) => ({ ...current, [props.scope]: props.usage }));
+    Promise.all((['day', 'week', 'month'] as TimeScope[]).map(async (scope) => [scope, await getTokenUsage(scope)] as const))
+      .then((results) => {
+        if (cancelled) return;
+        const next: Partial<Record<TimeScope, TokenUsage[]>> = {};
+        for (const [scope, result] of results) next[scope] = result.usage;
+        setUsageByScope((current) => ({ ...current, ...next }));
+      })
+      .catch(() => {
+        // The current scope remains visible even if one background aggregate fails.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.scope, props.usage]);
+
+  function selectScope(scope: TokenDialogScope) {
+    setActiveScope(scope);
+    if (scope !== 'all') props.setScope(scope);
+  }
+
+  const total = appOrder.reduce((sum, appId) => sum + tokenDialogValue(appId, activeScope, usageByScope), 0);
+  const totalsByApp = appOrder.map((appId) => ({ appId, total: tokenDialogValue(appId, activeScope, usageByScope) }));
+  const maxTotal = Math.max(1, ...totalsByApp.map((item) => item.total));
+
+  return (
+    <div className="focus-dialog-backdrop" role="presentation" onClick={props.onClose}>
+      <section className="focus-dialog focus-token-modal" role="dialog" aria-modal="true" aria-labelledby="token-usage-title" onClick={(event) => event.stopPropagation()}>
+        <header>
+          <div>
+            <h2 id="token-usage-title">Token 用量</h2>
+            <p>按 App 分时段统计 · 含全部 App 汇总</p>
+          </div>
+          <button type="button" className="focus-dialog-close" onClick={props.onClose} aria-label="关闭">×</button>
+        </header>
+        <div className="focus-token-segments" role="group" aria-label="Token 统计范围">
+          {(['day', 'week', 'month', 'all'] as TokenDialogScope[]).map((scope) => (
+            <button key={scope} type="button" className={activeScope === scope ? 'active' : ''} onClick={() => selectScope(scope)}>
+              {scope === 'day' ? '今天' : scope === 'week' ? '本周' : scope === 'month' ? '本月' : '所有'}
+            </button>
+          ))}
+        </div>
+        <div className="focus-token-total">
+          <span>{activeScope === 'all' ? '已加载最大范围总量' : `${scopeLabel(activeScope)} 总量`}</span>
+          <strong>{formatTokenCount(total)}</strong>
+        </div>
+        <div className="focus-token-stack" aria-hidden="true">
+          {totalsByApp.map(({ appId, total }) => (
+            <span key={appId} className={appId} style={{ flexGrow: Math.max(1, total ? total / maxTotal : 0.08) }} />
+          ))}
+        </div>
+        <div className="focus-token-table" role="table" aria-label="Token 用量明细">
+          <div className="focus-token-table-head" role="row">
+            <span>APP</span>
+            <span>今天</span>
+            <span>本周</span>
+            <span>本月</span>
+            <span>所有</span>
+          </div>
+          {appOrder.map((appId) => (
+            <div className="focus-token-table-row" role="row" key={appId}>
+              <strong><i className={`dot ${appId}`} />{appLabel(appId)}</strong>
+              <span>{formatTokenCount(tokenDialogValue(appId, 'day', usageByScope))}</span>
+              <span>{formatTokenCount(tokenDialogValue(appId, 'week', usageByScope))}</span>
+              <span>{formatTokenCount(tokenDialogValue(appId, 'month', usageByScope))}</span>
+              <span>{formatTokenCount(tokenDialogValue(appId, 'all', usageByScope))}</span>
+            </div>
+          ))}
+          <div className="focus-token-table-row summary" role="row">
+            <strong>全部 App 汇总</strong>
+            <span>{formatTokenCount(tokenDialogScopeTotal('day', usageByScope))}</span>
+            <span>{formatTokenCount(tokenDialogScopeTotal('week', usageByScope))}</span>
+            <span>{formatTokenCount(tokenDialogScopeTotal('month', usageByScope))}</span>
+            <span>{formatTokenCount(tokenDialogScopeTotal('all', usageByScope))}</span>
+          </div>
+        </div>
+        <footer>数值为输入 + 输出 token 合计 · 来自本地 adapter 聚合</footer>
+      </section>
+    </div>
+  );
+}
+
+function tokenDialogValue(appId: AppId, scope: TokenDialogScope, usageByScope: Partial<Record<TimeScope, TokenUsage[]>>): number {
+  if (scope === 'all') {
+    return Math.max(...(['day', 'week', 'month'] as TimeScope[]).map((item) => tokenDialogValue(appId, item, usageByScope)));
+  }
+  return usageByScope[scope]?.find((row) => row.appId === appId)?.totalTokens ?? 0;
+}
+
+function tokenDialogScopeTotal(scope: TokenDialogScope, usageByScope: Partial<Record<TimeScope, TokenUsage[]>>): number {
+  return appOrder.reduce((sum, appId) => sum + tokenDialogValue(appId, scope, usageByScope), 0);
 }
 
 function DeleteSessionDialog(props: { session: Session; busy: boolean; error?: string; onCancel(): void; onConfirm(): void }) {
@@ -1780,7 +2718,7 @@ function isNoisyTerminalLine(line: string): boolean {
 }
 
 function AppConnectors({ apps, tokenUsage, scope, activeApp, onApp }: { apps: AppInfo[]; tokenUsage: TokenUsage[]; scope: TimeScope; activeApp: AppId; onApp(appId: AppId): void }) {
-  return <section className="card panel compact"><PanelHead title="App 连接器" note="会话数、Token、日志采集状态" />{appOrder.map((appId) => { const app = apps.find((item) => item.appId === appId); const usage = tokenUsage.find((item) => item.appId === appId); return <button type="button" className={`connector-row ${activeApp === appId ? 'active' : ''}`} data-testid={`connector-${appId}`} key={appId} onClick={() => onApp(appId)}><div className={`logo ${appId}`}>{appInitials(appId)}</div><div><strong>{appLabel(appId)} <Status status={app?.status === 'connected' ? 'running' : app?.status === 'not_configured' ? 'pending' : 'interrupted'} /></strong><span>{app?.sessions ?? 0} 个会话 · {scopeLabel(scope)} {formatTokenCount(usage?.totalTokens ?? 0)} token · {app?.command ?? app?.message ?? '未发现命令'}</span></div><b>{app?.sessions ?? 0}<small>会话</small></b></button>; })}</section>;
+  return <section className="card panel compact"><PanelHead title="App 连接器" note="会话数、Token、日志采集状态" />{appOrder.map((appId) => { const app = apps.find((item) => item.appId === appId); const usage = tokenUsage.find((item) => item.appId === appId); return <button type="button" className={`connector-row ${appId} ${activeApp === appId ? 'active' : ''}`} data-testid={`connector-${appId}`} key={appId} onClick={() => onApp(appId)}><div className={`logo ${appId}`}>{appInitials(appId)}</div><div><strong>{appLabel(appId)} <Status status={app?.status === 'connected' ? 'running' : app?.status === 'not_configured' ? 'pending' : 'interrupted'} /></strong><span>{app?.sessions ?? 0} 个会话 · {scopeLabel(scope)} {formatTokenCount(usage?.totalTokens ?? 0)} token · {app?.command ?? app?.message ?? '未发现命令'}</span></div><b>{app?.sessions ?? 0}<small>会话</small></b></button>; })}</section>;
 }
 
 function TokenCounts({ usage, scope, variant = 'stacked' }: { usage: TokenUsage[]; scope: TimeScope; variant?: 'stacked' | 'inline' }) {
@@ -1806,7 +2744,7 @@ function TokenCounts({ usage, scope, variant = 'stacked' }: { usage: TokenUsage[
 }
 
 function BillingModes({ apps, tokenUsage }: { apps: AppInfo[]; tokenUsage: TokenUsage[] }) {
-  return <section className="card panel compact"><PanelHead title="计费模式" note="来自本地 adapter 与 token 聚合" />{apps.slice(0, 3).map((app) => { const usage = tokenUsage.find((row) => row.appId === app.appId); return <div className="billing-row" key={app.appId}><div><strong>{billingModeTitle(app.billingMode)}</strong><span>{appLabel(app.appId)} · {app.message} · {formatTokenCount(usage?.totalTokens ?? 0)} tokens</span></div><b>{statusText(app.status)}</b></div>; })}</section>;
+  return <section className="card panel compact"><PanelHead title="计费模式" note="来自本地 adapter 与 token 聚合" />{apps.map((app) => { const usage = tokenUsage.find((row) => row.appId === app.appId); return <div className="billing-row" key={app.appId}><div><strong>{billingModeTitle(app.billingMode)}</strong><span>{appLabel(app.appId)} · {app.message} · {formatTokenCount(usage?.totalTokens ?? 0)} tokens</span></div><b>{statusText(app.status)}</b></div>; })}</section>;
 }
 
 function AppSummary({

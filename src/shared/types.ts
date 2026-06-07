@@ -1,4 +1,6 @@
-export type AppId = 'codex' | 'claude' | 'antigravity';
+export const APP_ORDER = ['codex', 'claude', 'antigravity', 'oh-my-pi', 'opencode'] as const;
+
+export type AppId = (typeof APP_ORDER)[number];
 
 export type AppStatus = 'connected' | 'not_configured' | 'missing' | 'error';
 
@@ -71,12 +73,9 @@ export interface TokenUsage {
   totalTokens: number;
 }
 
-export interface UsagePoint {
+export type UsagePoint = {
   label: string;
-  codex: number;
-  claude: number;
-  antigravity: number;
-}
+} & Record<AppId, number>;
 
 export interface CommandRun {
   id: string;

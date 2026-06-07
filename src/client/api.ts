@@ -112,13 +112,17 @@ function openSse<T>(path: string, onMessage: (payload: T) => void): EventSource 
 export function appLabel(appId: AppId): string {
   if (appId === 'codex') return 'Codex';
   if (appId === 'claude') return 'Claude';
-  return 'Antigravity';
+  if (appId === 'antigravity') return 'Antigravity';
+  if (appId === 'oh-my-pi') return 'Oh My Pi';
+  return 'OpenCode';
 }
 
 export function appInitials(appId: AppId): string {
   if (appId === 'codex') return 'CX';
   if (appId === 'claude') return 'CL';
-  return 'AG';
+  if (appId === 'antigravity') return 'AG';
+  if (appId === 'oh-my-pi') return 'PI';
+  return 'OC';
 }
 
 export function appClass(appId: AppId): string {

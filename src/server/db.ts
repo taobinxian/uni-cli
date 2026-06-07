@@ -47,7 +47,7 @@ export class Store {
 
   listApps(): AppInfo[] {
     return this.db
-      .prepare("SELECT * FROM apps ORDER BY CASE id WHEN 'codex' THEN 1 WHEN 'claude' THEN 2 WHEN 'antigravity' THEN 3 ELSE 99 END")
+      .prepare("SELECT * FROM apps ORDER BY CASE id WHEN 'codex' THEN 1 WHEN 'claude' THEN 2 WHEN 'antigravity' THEN 3 WHEN 'oh-my-pi' THEN 4 WHEN 'opencode' THEN 5 ELSE 99 END")
       .all()
       .map(mapApp);
   }
@@ -251,7 +251,7 @@ export class Store {
       .prepare(`
         SELECT * FROM token_usage
         WHERE scope = ?
-        ORDER BY CASE app_id WHEN 'codex' THEN 1 WHEN 'claude' THEN 2 WHEN 'antigravity' THEN 3 ELSE 99 END
+        ORDER BY CASE app_id WHEN 'codex' THEN 1 WHEN 'claude' THEN 2 WHEN 'antigravity' THEN 3 WHEN 'oh-my-pi' THEN 4 WHEN 'opencode' THEN 5 ELSE 99 END
       `)
       .all(scope)
       .map(mapTokenUsage);
@@ -468,7 +468,7 @@ export class Store {
 
       CREATE INDEX IF NOT EXISTS idx_deleted_sessions_native_id ON deleted_sessions(native_id);
     `);
-    this.db.prepare("UPDATE apps SET sort_order = CASE id WHEN 'codex' THEN 1 WHEN 'claude' THEN 2 WHEN 'antigravity' THEN 3 ELSE 99 END").run();
+    this.db.prepare("UPDATE apps SET sort_order = CASE id WHEN 'codex' THEN 1 WHEN 'claude' THEN 2 WHEN 'antigravity' THEN 3 WHEN 'oh-my-pi' THEN 4 WHEN 'opencode' THEN 5 ELSE 99 END").run();
   }
 }
 
