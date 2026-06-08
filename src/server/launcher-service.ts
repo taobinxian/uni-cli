@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
+import type { Readable } from 'node:stream';
 import type { AppId, TerminalFrame } from '../shared/types.js';
 import { EventBus } from './event-bus.js';
 
@@ -121,12 +123,12 @@ export class LauncherService {
       env: terminalEnv(),
       shell: false
     });
-    child.stdout.on('data', (chunk) => {
-      const text = cleanScriptPtyOutput(chunk.toString());
+    attachDecodedOutput(child.stdout, (raw) => {
+      const text = cleanScriptPtyOutput(raw);
       if (text) this.emit(input, 'stdout', text);
     });
-    child.stderr.on('data', (chunk) => {
-      const text = cleanScriptPtyOutput(chunk.toString());
+    attachDecodedOutput(child.stderr, (raw) => {
+      const text = cleanScriptPtyOutput(raw);
       if (text) this.emit(input, 'stderr', text);
     });
     child.on('close', (code, signal) => this.finish(input, code, signal));
@@ -147,8 +149,8 @@ export class LauncherService {
       shell: false
     });
     let started = true;
-    child.stdout.on('data', (chunk) => this.emit(input, 'stdout', chunk.toString()));
-    child.stderr.on('data', (chunk) => this.emit(input, 'stderr', chunk.toString()));
+    attachDecodedOutput(child.stdout, (text) => this.emit(input, 'stdout', text));
+    attachDecodedOutput(child.stderr, (text) => this.emit(input, 'stderr', text));
     child.on('error', (error) => {
       started = false;
       this.emit(input, 'stderr', `pty bridge failed: ${error.message}\n`);
@@ -172,8 +174,8 @@ export class LauncherService {
       shell: false,
       stdio: [input.stdin ?? 'pipe', 'pipe', 'pipe']
     });
-    child.stdout?.on('data', (chunk) => this.emit(input, 'stdout', chunk.toString()));
-    child.stderr?.on('data', (chunk) => this.emit(input, 'stderr', chunk.toString()));
+    attachDecodedOutput(child.stdout, (text) => this.emit(input, 'stdout', text));
+    attachDecodedOutput(child.stderr, (text) => this.emit(input, 'stderr', text));
     child.on('error', (error) => {
       this.emit(input, 'stderr', `process failed: ${error.message}\n`);
       this.finish(input, 1, null);
@@ -217,6 +219,19 @@ export class LauncherService {
       createdAt: new Date().toISOString()
     });
   }
+}
+
+function attachDecodedOutput(stream: Readable | null, onText: (text: string) => void): void {
+  if (!stream) return;
+  const decoder = new StringDecoder('utf8');
+  stream.on('data', (chunk: Buffer | string) => {
+    const text = typeof chunk === 'string' ? chunk : decoder.write(chunk);
+    if (text) onText(text);
+  });
+  stream.on('end', () => {
+    const remaining = decoder.end();
+    if (remaining) onText(remaining);
+  });
 }
 
 function generationKey(sessionId: string, generation: number): string {
@@ -275,6 +290,7 @@ function needsScriptPty(command: string): boolean {
 function cleanScriptPtyOutput(text: string): string {
   return text
     .replace(/script: tcgetattr\/ioctl: Operation not supported on socket\r?\n?/g, '')
+    .replace(/\uFFFD+/g, ' ')
     .replace(/\u0004\b\b/g, '');
 }
 

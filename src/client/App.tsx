@@ -2877,6 +2877,7 @@ function compactMessagePresentation(text: string, badge: string): { badge: strin
 
 function normalizeMessageText(text: string): string {
   return text
+    .replace(/\uFFFD+/g, ' ')
     .replace(/\r/g, '\n')
     .split('\n')
     .map((line) => line.replace(/\s+$/g, ''))
@@ -3822,6 +3823,7 @@ function firstText(...values: unknown[]): string {
 function cleanStreamDeltaText(value: unknown): string {
   if (typeof value !== 'string') return '';
   return value
+    .replace(/\uFFFD+/g, ' ')
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f]+/g, '');
@@ -3852,6 +3854,7 @@ function numberValue(value: unknown): number {
 
 function cleanTerminalText(text: string): string {
   return text
+    .replace(/\uFFFD+/g, ' ')
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ' ')
     .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, ' ')
     .replace(/\u001b[()][A-Za-z0-9]/g, ' ')
