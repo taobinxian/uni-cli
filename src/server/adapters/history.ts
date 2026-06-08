@@ -32,6 +32,7 @@ export function textFromContent(value: unknown): string {
 export function cleanHistoryText(text: string): string {
   return text
     .replace(/<environment_context>[\s\S]*?<\/environment_context>/g, ' ')
+    .replace(/\uFFFD+/g, ' ')
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ' ')
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f]+/g, ' ')
     .split('\n')
