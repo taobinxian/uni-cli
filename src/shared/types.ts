@@ -118,6 +118,14 @@ export interface TerminalFrame {
   text: string;
   createdAt: string;
   partial?: boolean;
+  /**
+   * Monotonic per-session sequence number assigned by EventBus when the
+   * frame is published. Used as the SSE `id:` field so clients can
+   * recover the missed tail with `Last-Event-ID` after a reconnect.
+   * Optional on the wire so adapter-side code can keep constructing frames
+   * without thinking about transport details.
+   */
+  seq?: number;
 }
 
 export interface SessionHistory {

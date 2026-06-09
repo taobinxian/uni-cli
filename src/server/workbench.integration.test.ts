@@ -93,9 +93,13 @@ setInterval(() => {}, 500);
     expect(firstHistoryPage.nextCursor).toBe(1);
 
     const session = await post<Session>('/api/sessions', { appId: 'codex', cwd: process.cwd(), prompt: 'initial fake prompt' }, 201);
+    // Match the CLI's *stdout* echo of the prompt rather than the system-stream
+    // history.message envelope that emitUserPrompt synthesises before the CLI
+    // sees the input — both contain "hello fake cli", and the latter would
+    // otherwise race the former.
     const terminalOutput = waitForSseMessage<TerminalFrame>(
       `${baseUrl}/sse/sessions/${session.id}`,
-      (frame) => frame.sessionId === session.id && frame.text.includes('hello fake cli')
+      (frame) => frame.sessionId === session.id && frame.stream === 'stdout' && frame.text.includes('hello fake cli')
     );
     const terminalEvent = waitForSseMessage<EventRecord>(
       `${baseUrl}/sse/events`,
@@ -108,7 +112,7 @@ setInterval(() => {}, 500);
     await expect(terminalEvent.promise).resolves.toMatchObject({ type: 'terminal.output' });
     const replayedOutput = waitForSseMessage<TerminalFrame>(
       `${baseUrl}/sse/sessions/${session.id}`,
-      (frame) => frame.sessionId === session.id && frame.text.includes('hello fake cli')
+      (frame) => frame.sessionId === session.id && frame.stream === 'stdout' && frame.text.includes('hello fake cli')
     );
     await expect(replayedOutput.promise).resolves.toMatchObject({ appId: 'codex', stream: 'stdout' });
     replayedOutput.close();
@@ -157,6 +161,70 @@ setInterval(() => {}, 500);
 
     terminalOutput.close();
     terminalEvent.close();
+  });
+
+  it('resumes the SSE stream after a reconnect by replaying frames since Last-Event-ID', async () => {
+    const session = await post<Session>('/api/sessions', { appId: 'codex', cwd: process.cwd(), prompt: 'reconnect test' }, 201);
+
+    // First SSE connection — wait for the prompt echo to arrive, capture its seq.
+    const firstFrame = waitForSseMessage<TerminalFrame & { seq?: number }>(
+      `${baseUrl}/sse/sessions/${session.id}`,
+      (frame) => frame.sessionId === session.id && frame.stream === 'stdout' && frame.text.includes('reconnect test')
+    );
+    await firstFrame.ready;
+    const captured = await firstFrame.promise;
+    firstFrame.close();
+    expect(typeof captured.seq).toBe('number');
+
+    // Reconnect with Last-Event-ID set to the captured seq. The server must
+    // not replay the already-acknowledged frame — instead it must only deliver
+    // frames produced after that seq.
+    const reconnectSeq = captured.seq!;
+    const reconnectResponse = await fetch(`${baseUrl}/sse/sessions/${session.id}`, {
+      headers: { 'Last-Event-ID': String(reconnectSeq) }
+    });
+    expect(reconnectResponse.ok).toBe(true);
+
+    // Deterministically generate a *post*-reconnect frame so the test does
+    // not race the fake-CLI's spontaneous output.
+    await post(`/api/sessions/${session.id}/prompt`, { prompt: 'post-reconnect ping' });
+
+    const reader = reconnectResponse.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const seenSeqs: number[] = [];
+    const deadline = Date.now() + 2000;
+    let abort = false;
+    while (!abort && Date.now() < deadline) {
+      const { value, done } = await Promise.race([
+        reader.read(),
+        new Promise<{ value: undefined; done: true }>((resolve) => setTimeout(() => resolve({ value: undefined, done: true }), 400))
+      ]);
+      if (done) break;
+      buffer += decoder.decode(value!, { stream: true });
+      let delimiter = buffer.indexOf('\n\n');
+      while (delimiter >= 0) {
+        const block = buffer.slice(0, delimiter);
+        buffer = buffer.slice(delimiter + 2);
+        delimiter = buffer.indexOf('\n\n');
+        const idLine = block.split('\n').find((line) => line.startsWith('id:'));
+        const seq = idLine ? Number(idLine.slice(3).trim()) : NaN;
+        if (Number.isFinite(seq)) seenSeqs.push(seq);
+        // Stop once we've seen at least one frame with seq > reconnectSeq.
+        if (seenSeqs.some((s) => s > reconnectSeq)) {
+          abort = true;
+          break;
+        }
+      }
+    }
+    await reader.cancel();
+    // Both checks matter: we must have seen at least one frame, and every
+    // frame we saw must have a seq strictly greater than the one we last
+    // acknowledged. The non-empty assertion guards against the
+    // `[].every === true` trap.
+    expect(seenSeqs.length).toBeGreaterThan(0);
+    expect(seenSeqs.every((s) => s > reconnectSeq)).toBe(true);
+    await post(`/api/sessions/${session.id}/stop`);
   });
 
   async function get<T>(path: string): Promise<T> {
