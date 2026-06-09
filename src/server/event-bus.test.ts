@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import { Store } from './db.js';
-import { EventBus, splitTerminalFrameForSse, createTerminalSseWriter } from './event-bus.js';
+import { EventBus, splitTerminalFrameForSse, createTerminalSseWriter, readPositiveIntEnv } from './event-bus.js';
 import { parseChatEnvelope } from '../shared/chat-stream.js';
 import type { TerminalFrame } from '../shared/types.js';
 
@@ -179,6 +179,33 @@ describe('EventBus.terminal — monotonic seq for SSE reconnect', () => {
     const history = bus.getTerminalHistory('s7');
     const after = bus.getTerminalHistorySince('s7', history[0].seq!);
     expect(after.map((frame) => frame.text)).toEqual(['b', 'c']);
+  });
+});
+
+describe('readPositiveIntEnv — guard against invalid env values', () => {
+  it('returns the value when env is a positive integer', () => {
+    process.env.WB_TEST_ENV_INT = '42';
+    expect(readPositiveIntEnv('WB_TEST_ENV_INT', 999)).toBe(42);
+    delete process.env.WB_TEST_ENV_INT;
+  });
+
+  it('falls back when env is unset', () => {
+    delete process.env.WB_TEST_ENV_INT;
+    expect(readPositiveIntEnv('WB_TEST_ENV_INT', 777)).toBe(777);
+  });
+
+  it('falls back when env is non-numeric', () => {
+    process.env.WB_TEST_ENV_INT = 'not-a-number';
+    expect(readPositiveIntEnv('WB_TEST_ENV_INT', 777)).toBe(777);
+    delete process.env.WB_TEST_ENV_INT;
+  });
+
+  it('falls back when env is zero or negative', () => {
+    process.env.WB_TEST_ENV_INT = '0';
+    expect(readPositiveIntEnv('WB_TEST_ENV_INT', 777)).toBe(777);
+    process.env.WB_TEST_ENV_INT = '-5';
+    expect(readPositiveIntEnv('WB_TEST_ENV_INT', 777)).toBe(777);
+    delete process.env.WB_TEST_ENV_INT;
   });
 });
 

@@ -103,11 +103,17 @@ function envelopeMessageId(frame: TerminalFrame, role: ChatRole): string {
 function codexExtractor(payload: Record<string, unknown>): EnvelopeFragment | EnvelopeFragment[] | undefined {
   const type = String(payload.type ?? '');
   if (!type) return undefined;
-  if (type === 'response_item' && payload.item && typeof payload.item === 'object') {
+  // Live `codex exec --json` wraps every payload as
+  //   {"type":"item.completed","item":{...}} (also `item.started`,
+  //   `item.updated`, ...). The legacy `response_item` wrapper still
+  //   appears in some replays. Unwrap both and recurse so each `item.type`
+  //   reaches its dedicated branch below.
+  if ((type === 'response_item' || type.startsWith('item.')) && payload.item && typeof payload.item === 'object') {
     return codexExtractor(payload.item as Record<string, unknown>);
   }
   if (type === 'user_message') {
-    const text = String(payload.message ?? '');
+    // Live shape uses `text`; some older transcripts use `message`.
+    const text = String(payload.text ?? payload.message ?? '');
     return text ? { role: 'user', text } : undefined;
   }
   if (type === 'agent_message') {

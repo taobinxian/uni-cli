@@ -13,10 +13,22 @@ type Unsubscribe = () => void;
 type SessionTailProvider = (sessionId: string) => Promise<TerminalFrame[]>;
 
 /** Maximum buffered frames retained per session for SSE replay. */
-const SESSION_HISTORY_LIMIT = Math.max(
-  300,
-  Number(process.env.WORKBENCH_SSE_HISTORY_LIMIT ?? 1000)
-);
+const SESSION_HISTORY_LIMIT = Math.max(300, readPositiveIntEnv('WORKBENCH_SSE_HISTORY_LIMIT', 1000));
+
+/**
+ * Read a positive-integer env variable, falling back to `fallback` when the
+ * variable is unset, non-numeric, zero or negative. Exported so callers
+ * (and tests) can share the same NaN-resilient parsing — a bare
+ * `Number(env ?? default)` returns `NaN` for garbage strings and silently
+ * disables limits like `WORKBENCH_SSE_HISTORY_LIMIT` (where `> NaN` is
+ * always false, causing unbounded growth).
+ */
+export function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 export class EventBus {
   private emitter = new EventEmitter();
@@ -390,10 +402,7 @@ export function createTerminalSseWriter(response: ServerResponse): TerminalSseWr
 }
 
 function readIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  return readPositiveIntEnv(name, fallback);
 }
 
 export function splitTerminalFrameForSse(frame: TerminalFrame): TerminalFrame[] {

@@ -52,6 +52,61 @@ describe('extractEnvelopeFrames', () => {
       expect(parseChatEnvelope(out[0].text)).toMatchObject({ role: 'assistant', text: 'wrapped' });
     });
 
+    it('extracts item.completed agent_message — the real `codex exec --json` shape', () => {
+      // Live `codex exec --json` writes
+      //   {"type":"item.completed","item":{"type":"agent_message","text":"OK"}}
+      // Without unwrapping `item.*`, agent replies never reach the envelope
+      // pipeline and the unified chat protocol regresses to raw JSON.
+      const out = extractEnvelopeFrames(
+        frame({
+          appId: 'codex',
+          text:
+            JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'OK' } }) + '\n'
+        })
+      );
+      expect(parseChatEnvelope(out[0].text)).toMatchObject({ role: 'assistant', text: 'OK' });
+    });
+
+    it('extracts item.completed user_message', () => {
+      const out = extractEnvelopeFrames(
+        frame({
+          appId: 'codex',
+          text:
+            JSON.stringify({ type: 'item.completed', item: { type: 'user_message', text: 'hi' } }) + '\n'
+        })
+      );
+      expect(parseChatEnvelope(out[0].text)).toMatchObject({ role: 'user', text: 'hi' });
+    });
+
+    it('extracts item.completed function_call as tool role', () => {
+      const out = extractEnvelopeFrames(
+        frame({
+          appId: 'codex',
+          text:
+            JSON.stringify({
+              type: 'item.completed',
+              item: { type: 'function_call', name: 'shell', arguments: '{"cmd":"ls"}' }
+            }) + '\n'
+        })
+      );
+      const env = parseChatEnvelope(out[0].text);
+      expect(env?.role).toBe('tool');
+      expect(env?.text).toContain('shell');
+      expect(env?.text).toContain('"cmd"');
+    });
+
+    it('supports the `text` field on user_message (live format) in addition to `message` (legacy)', () => {
+      const liveOut = extractEnvelopeFrames(
+        frame({ appId: 'codex', text: JSON.stringify({ type: 'user_message', text: 'live-q' }) + '\n' })
+      );
+      expect(parseChatEnvelope(liveOut[0].text)).toMatchObject({ role: 'user', text: 'live-q' });
+
+      const legacyOut = extractEnvelopeFrames(
+        frame({ appId: 'codex', text: JSON.stringify({ type: 'user_message', message: 'legacy-q' }) + '\n' })
+      );
+      expect(parseChatEnvelope(legacyOut[0].text)).toMatchObject({ role: 'user', text: 'legacy-q' });
+    });
+
     it('extracts tool calls as the tool role', () => {
       const out = extractEnvelopeFrames(
         frame({
