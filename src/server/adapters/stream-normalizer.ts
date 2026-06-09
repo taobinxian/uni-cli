@@ -31,7 +31,16 @@ type Extractor = (payload: Record<string, unknown>) => EnvelopeFragment | Envelo
 
 const EXTRACTORS: Partial<Record<AppId, Extractor>> = {
   codex: codexExtractor,
-  claude: claudeExtractor,
+  // NOTE: Claude is intentionally absent. The client renderer already turns
+  // every Claude stream-json shape (`result`, `assistant` with content
+  // arrays, `stream_event` deltas, internal hook frames) into a
+  // `history.message` envelope inside `normalizeClaudeStreamFrame`. Adding
+  // a server-side envelope on top produces a second envelope with a
+  // different `messageId`, which `mergeLiveSemanticHistoryFrame` does not
+  // merge — `framesToConversationTurns` then treats them as two consecutive
+  // live assistant turns and concatenates the text, surfacing the final
+  // answer twice. We leave Claude entirely to the client until/unless the
+  // client-side normaliser is retired.
   opencode: genericRoleContentExtractor,
   'oh-my-pi': genericRoleContentExtractor,
   antigravity: genericRoleContentExtractor
@@ -175,51 +184,6 @@ function textFromCodexArguments(value: unknown): string {
     }
   }
   return textFromCodexMessage(value);
-}
-
-// ---- Claude (`claude --output-format stream-json --include-partial-messages`) ------
-
-function claudeExtractor(payload: Record<string, unknown>): EnvelopeFragment | undefined {
-  if (isClaudeInternalEvent(payload)) return undefined;
-  const type = String(payload.type ?? '');
-  if (type === 'result') {
-    const text = firstString(payload.result, payload.output, payload.text, payload.content, payload.summary, payload.message);
-    if (!text) return undefined;
-    const role: ChatRole = isClaudeResultError(payload) ? 'error' : 'assistant';
-    return { role, text };
-  }
-  const assistantText = claudeAssistantText(payload);
-  if (assistantText) return { role: 'assistant', text: assistantText };
-  // NB: `stream_event/content_block_delta` partials are intentionally not
-  // normalised here. The client renderer already merges those deltas into
-  // the assistant turn from the raw stdout path; producing a second envelope
-  // would cause the same text to be rendered twice. The final `result` /
-  // `assistant` JSON line above still goes through the normaliser, which is
-  // what other adapters need for cross-app uniformity.
-  return undefined;
-}
-
-function claudeAssistantText(payload: Record<string, unknown>): string {
-  const type = String(payload.type ?? '').toLowerCase();
-  const message = payload.message && typeof payload.message === 'object' ? (payload.message as Record<string, unknown>) : undefined;
-  const role = String(payload.role ?? message?.role ?? '').toLowerCase();
-  if (!role.includes('assistant') && !role.includes('model') && type !== 'assistant') return '';
-  const content = message?.content ?? payload.content ?? payload.text ?? payload.response ?? payload.output;
-  return firstTextFromContent(content);
-}
-
-function isClaudeInternalEvent(value: Record<string, unknown>): boolean {
-  const type = String(value.type ?? '');
-  const subtype = String(value.subtype ?? value.hook_name ?? value.hook_event_name ?? '');
-  if (type === 'system' && /^hook_/i.test(subtype)) return true;
-  if (/^hook_/i.test(type)) return true;
-  if (type === 'ping' || type === 'message_start' || type === 'message_stop') return true;
-  return false;
-}
-
-function isClaudeResultError(value: Record<string, unknown>): boolean {
-  const subtype = String(value.subtype ?? value.status ?? '');
-  return Boolean(value.is_error) || /error|failed|failure/i.test(subtype);
 }
 
 // ---- Generic `{ role, content }` / `{ message: { role, content } }` ----------------

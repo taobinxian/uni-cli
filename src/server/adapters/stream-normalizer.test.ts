@@ -119,15 +119,25 @@ describe('extractEnvelopeFrames', () => {
     });
   });
 
-  describe('claude', () => {
-    it('extracts result envelope', () => {
+  describe('claude — client owns the entire normalisation path', () => {
+    // The client renderer already converts every Claude JSON shape
+    // (`result`, `assistant` with content arrays, `stream_event` deltas,
+    // internal hook frames…) via `normalizeClaudeStreamFrame`. If the
+    // server ALSO emits a `history.message` envelope, the resulting two
+    // envelopes carry different messageIds — `mergeLiveSemanticHistoryFrame`
+    // does not merge them, and `framesToConversationTurns` then treats
+    // them as two consecutive live assistant turns and concatenates the
+    // text, surfacing Claude's final answer twice. So we skip Claude in
+    // the server-side normaliser entirely.
+
+    it('does not envelope result frames', () => {
       const out = extractEnvelopeFrames(
         frame({ appId: 'claude', text: JSON.stringify({ type: 'result', result: 'final answer' }) + '\n' })
       );
-      expect(parseChatEnvelope(out[0].text)).toMatchObject({ role: 'assistant', text: 'final answer' });
+      expect(out).toEqual([]);
     });
 
-    it('extracts assistant message with text content array', () => {
+    it('does not envelope assistant message frames with content arrays', () => {
       const out = extractEnvelopeFrames(
         frame({
           appId: 'claude',
@@ -138,10 +148,10 @@ describe('extractEnvelopeFrames', () => {
             }) + '\n'
         })
       );
-      expect(parseChatEnvelope(out[0].text)).toMatchObject({ role: 'assistant', text: 'hello there' });
+      expect(out).toEqual([]);
     });
 
-    it('returns empty for hook-style internal events', () => {
+    it('does not envelope hook-style internal events', () => {
       const out = extractEnvelopeFrames(
         frame({
           appId: 'claude',
@@ -151,11 +161,7 @@ describe('extractEnvelopeFrames', () => {
       expect(out).toEqual([]);
     });
 
-    it('does not envelope stream_event partial deltas — the client renders those directly', () => {
-      // Producing an envelope here would duplicate the assistant turn since
-      // the client's existing claude stream-json renderer already inlines
-      // content_block_delta text into the live turn. We rely on the final
-      // `result` / `assistant` JSON line to drive the envelope path instead.
+    it('does not envelope stream_event partial deltas', () => {
       const out = extractEnvelopeFrames(
         frame({
           appId: 'claude',
