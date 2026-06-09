@@ -325,6 +325,31 @@ describe('splitTerminalFrameForSse — grapheme-safe chunking', () => {
     expect(chunks[0].text.startsWith(family)).toBe(true);
   });
 
+  it('preserves trailing newline delimiters on each plain-text chunk so the client can rejoin lines', () => {
+    // Without the newline, the client's `mergedConversationText` concats
+    // adjacent live assistant frames with no separator, so `first\nsecond`
+    // would render as `firstsecond`. Each line-chunk keeps its `\n`.
+    const chunks = splitTerminalFrameForSse({
+      ...baseFrame,
+      text: 'first line of text\nsecond line of text\n'
+    });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0].text.endsWith('\n')).toBe(true);
+    // Joining all chunks must round-trip the original text exactly.
+    expect(chunks.map((c) => c.text).join('')).toBe('first line of text\nsecond line of text\n');
+  });
+
+  it('omits the trailing newline only on the last chunk when the input has none', () => {
+    const chunks = splitTerminalFrameForSse({
+      ...baseFrame,
+      text: 'first line of text\nsecond line of text'
+    });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0].text.endsWith('\n')).toBe(true);
+    expect(chunks[chunks.length - 1].text.endsWith('\n')).toBe(false);
+    expect(chunks.map((c) => c.text).join('')).toBe('first line of text\nsecond line of text');
+  });
+
   it('does not split a single-line system frame at all', () => {
     expect(
       splitTerminalFrameForSse({ ...baseFrame, stream: 'system', text: 'x'.repeat(200) })

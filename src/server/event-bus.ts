@@ -501,26 +501,43 @@ function splitJsonlFrame(frame: TerminalFrame): TerminalFrame[] | undefined {
 
 function splitPlainTerminalFrame(frame: TerminalFrame): TerminalFrame[] {
   // Split multi-line plain output by line rather than by character count.
-  // Mid-line slicing would break the appearance of CLI rows (e.g. a tool
-  // command split across chunks) and made it impossible for the client to
-  // match against a recognisable substring. A line is the smallest unit a
-  // human reasonably wants to see in one piece, so we use it as the chunk.
+  // Mid-line slicing would break the appearance of CLI rows; a line is the
+  // smallest unit a human reasonably wants to see in one piece.
+  //
+  // Important: keep the trailing newline attached to its line chunk so the
+  // wire-level concatenation is loss-less. The client's
+  // `mergedConversationText` concatenates adjacent live assistant frames
+  // with no extra separator — if we dropped the `\n`, `first\nsecond`
+  // would arrive at the renderer as `firstsecond`.
   const segments = frame.text.split(/(\r?\n)/);
   if (segments.length <= 1) return [frame];
   const chunks: TerminalFrame[] = [];
-  let atLineStart = true;
+  let pendingLine: string | undefined;
   for (const segment of segments) {
     if (!segment) continue;
     if (/^\r?\n$/.test(segment)) {
-      atLineStart = true;
+      if (pendingLine !== undefined) {
+        // Attach the separator to the line we just finished.
+        chunks.push({ ...frame, text: pendingLine + segment, partial: false });
+        pendingLine = undefined;
+      }
+      // Else: leading or back-to-back separators — drop the empty line so
+      // we don't emit a noise chunk with no text content.
       continue;
     }
-    chunks.push({
-      ...frame,
-      text: segment,
-      partial: !atLineStart
-    });
-    atLineStart = false;
+    // Two content tokens in a row should not happen because `split(/(\r?\n)/)`
+    // interleaves content and separators, but be defensive: flush any
+    // dangling line before starting a new one.
+    if (pendingLine !== undefined) {
+      chunks.push({ ...frame, text: pendingLine, partial: false });
+    }
+    pendingLine = segment;
+  }
+  // Trailing line without a newline (e.g. raw stdout that hasn't flushed
+  // its final `\n` yet) — emit it as a partial chunk so the client knows
+  // the line is still in-flight.
+  if (pendingLine !== undefined) {
+    chunks.push({ ...frame, text: pendingLine, partial: true });
   }
   if (chunks.length <= 1) return [frame];
   return chunks;
