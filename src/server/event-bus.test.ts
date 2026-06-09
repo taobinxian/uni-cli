@@ -182,6 +182,44 @@ describe('EventBus.terminal — monotonic seq for SSE reconnect', () => {
   });
 });
 
+describe('EventBus.recordTailFrame — adapter-tail frames join the seq stream', () => {
+  it('stamps a seq, remembers the frame for replay, and returns it for the writer', () => {
+    const { bus } = makeBus();
+    const incoming: TerminalFrame = {
+      sessionId: 's10',
+      appId: 'codex',
+      stream: 'system',
+      text: JSON.stringify({ type: 'history.message', role: 'assistant', text: 'tailed' }),
+      createdAt: '2026-01-01T00:00:00.000Z'
+    };
+    const stamped = bus.recordTailFrame(incoming);
+    expect(typeof stamped.seq).toBe('number');
+    const history = bus.getTerminalHistory('s10');
+    expect(history.map((frame) => frame.seq)).toEqual([stamped.seq]);
+  });
+
+  it('keeps tail seqs monotonic and replayable via Last-Event-ID', () => {
+    const { bus } = makeBus();
+    const a = bus.recordTailFrame({
+      sessionId: 's11',
+      appId: 'codex',
+      stream: 'system',
+      text: 'frame-a',
+      createdAt: '2026-01-01T00:00:00.000Z'
+    });
+    const b = bus.recordTailFrame({
+      sessionId: 's11',
+      appId: 'codex',
+      stream: 'system',
+      text: 'frame-b',
+      createdAt: '2026-01-01T00:00:01.000Z'
+    });
+    expect(a.seq! < b.seq!).toBe(true);
+    const recovered = bus.getTerminalHistorySince('s11', a.seq!);
+    expect(recovered).toEqual([b]);
+  });
+});
+
 describe('readPositiveIntEnv — guard against invalid env values', () => {
   it('returns the value when env is a positive integer', () => {
     process.env.WB_TEST_ENV_INT = '42';

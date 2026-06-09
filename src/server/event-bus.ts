@@ -132,6 +132,19 @@ export class EventBus {
   }
 
   /**
+   * Stamp a seq and remember a frame coming from the adapter's history
+   * tail provider. Returns the stamped frame so the caller can hand it to
+   * a writer. Without this step tail-polled frames would reach the wire
+   * without an `id:` line and could not be recovered via Last-Event-ID
+   * on reconnect — see PR#3 codex review.
+   */
+  recordTailFrame(frame: TerminalFrame): TerminalFrame {
+    const stamped = this.stampSeq(frame);
+    this.rememberTerminalFrame(stamped);
+    return stamped;
+  }
+
+  /**
    * Parses an SSE `Last-Event-ID` header from a Fastify request. Headers
    * arrive lower-cased from Fastify, but a defensive double lookup makes
    * the helper robust to upstream proxies that preserve casing.
@@ -242,7 +255,11 @@ export class EventBus {
           seen.add(key);
           const createdAt = Date.parse(frame.createdAt);
           if (Number.isFinite(createdAt) && createdAt < connectedAt - 500) continue;
-          terminalWriter.write(frame);
+          // Stamp + remember so the tailed frame joins the per-session seq
+          // stream and can be recovered on reconnect via Last-Event-ID.
+          // Without this, history-tail frames hit the wire without an
+          // `id:` line and a reconnect could not replay them.
+          terminalWriter.write(this.recordTailFrame(frame));
         }
       } catch {
         // Source history tailing is best-effort; launcher stdout/stderr remains authoritative.
