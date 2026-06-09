@@ -16,6 +16,7 @@ import {
   stopSession
 } from './api.js';
 import { formatDuration, formatTokenCount } from '../shared/format.js';
+import { cleanInlineText } from '../shared/chat-stream.js';
 import { APP_ORDER, type AppId, type AppInfo, type Confirmation, type EventRecord, type Session, type TerminalFrame, type TimeScope, type TokenUsage, type UsagePoint } from '../shared/types.js';
 
 const appOrder = APP_ORDER;
@@ -3267,6 +3268,14 @@ function conversationItemsFromJsonLine(line: string, frame: TerminalFrame, fallb
       const text = clipConversationText(cleanTerminalText(String(value.text ?? '')), role);
       return text ? [{ appId: frame.appId ?? fallbackAppId, role, text, createdAt: frame.createdAt, live: Boolean(value.live), cwd, partial: frame.partial }] : [];
     }
+    // The server-side stream normaliser marks a raw frame with
+    // `normalized: true` when it has already derived one or more
+    // `history.message` envelope frames for the same content. Falling
+    // through to `displayFromJson` here would render the same chat turn a
+    // second time (the raw assistant text + the envelope assistant text
+    // get merged into one duplicated turn). Skip the raw path so the
+    // envelope is the single source of truth.
+    if (frame.normalized) return [];
     return prefixedLinesToConversationItems(displayFromJson(value), frame, fallbackAppId, true, cwd);
   } catch {
     return [];
@@ -3853,17 +3862,11 @@ function numberValue(value: unknown): number {
 }
 
 function cleanTerminalText(text: string): string {
-  return text
-    .replace(/\uFFFD+/g, ' ')
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, ' ')
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, ' ')
-    .replace(/\u001b[()][A-Za-z0-9]/g, ' ')
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]+/g, ' ')
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .map((line) => line.replace(/\s+/g, ' ').trim())
-    .filter(Boolean)
-    .join('\n');
+  // Delegated to the shared cleaner so server and client strip ANSI,
+  // control chars and U+FFFD identically. Keeping the local function as a
+  // single thin entry point means existing call sites pick up the shared
+  // behaviour without further churn.
+  return cleanInlineText(text);
 }
 
 function compactDisplayLines(lines: string[]): string[] {

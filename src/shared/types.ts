@@ -118,6 +118,23 @@ export interface TerminalFrame {
   text: string;
   createdAt: string;
   partial?: boolean;
+  /**
+   * Monotonic per-session sequence number assigned by EventBus when the
+   * frame is published. Used as the SSE `id:` field so clients can
+   * recover the missed tail with `Last-Event-ID` after a reconnect.
+   * Optional on the wire so adapter-side code can keep constructing frames
+   * without thinking about transport details.
+   */
+  seq?: number;
+  /**
+   * True when the server-side stream normaliser successfully derived one
+   * or more `history.message` envelope frames from this raw frame. The
+   * client uses it as a hint to skip its own raw-JSON conversion path so
+   * the same chat turn is not rendered twice (once from raw stdout JSON,
+   * once from the envelope). Always undefined on the envelope frames
+   * themselves — the marker only ever annotates the raw source frame.
+   */
+  normalized?: boolean;
 }
 
 export interface SessionHistory {
