@@ -3268,6 +3268,14 @@ function conversationItemsFromJsonLine(line: string, frame: TerminalFrame, fallb
       const text = clipConversationText(cleanTerminalText(String(value.text ?? '')), role);
       return text ? [{ appId: frame.appId ?? fallbackAppId, role, text, createdAt: frame.createdAt, live: Boolean(value.live), cwd, partial: frame.partial }] : [];
     }
+    // The server-side stream normaliser marks a raw frame with
+    // `normalized: true` when it has already derived one or more
+    // `history.message` envelope frames for the same content. Falling
+    // through to `displayFromJson` here would render the same chat turn a
+    // second time (the raw assistant text + the envelope assistant text
+    // get merged into one duplicated turn). Skip the raw path so the
+    // envelope is the single source of truth.
+    if (frame.normalized) return [];
     return prefixedLinesToConversationItems(displayFromJson(value), frame, fallbackAppId, true, cwd);
   } catch {
     return [];

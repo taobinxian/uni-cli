@@ -48,6 +48,41 @@ describe('EventBus.terminal — envelope derivation', () => {
     expect(received[0].stream).toBe('stdout');
   });
 
+  it('marks the raw frame as `normalized` when a chat envelope is derived', () => {
+    // The client uses `normalized` as a hint to skip its own raw-JSON
+    // conversation path; otherwise the same agent_message would be rendered
+    // twice — once from the raw stdout JSON and once from the envelope.
+    const { bus } = makeBus();
+    const received: TerminalFrame[] = [];
+    bus.subscribeTerminal('s-norm', (frame) => received.push(frame));
+    bus.terminal({
+      sessionId: 's-norm',
+      appId: 'codex',
+      stream: 'stdout',
+      text: JSON.stringify({ type: 'agent_message', message: 'hi' }) + '\n',
+      createdAt: '2026-01-01T00:00:00.000Z'
+    });
+    const raw = received.find((frame) => frame.stream === 'stdout');
+    const envelope = received.find((frame) => frame.stream === 'system');
+    expect(raw?.normalized).toBe(true);
+    expect(envelope?.normalized).toBeUndefined();
+  });
+
+  it('does not mark frames that produce no envelope (plain text / claude raw)', () => {
+    const { bus } = makeBus();
+    const received: TerminalFrame[] = [];
+    bus.subscribeTerminal('s-plain', (frame) => received.push(frame));
+    bus.terminal({
+      sessionId: 's-plain',
+      appId: 'claude',
+      stream: 'stdout',
+      text: 'plain text\n',
+      createdAt: '2026-01-01T00:00:00.000Z'
+    });
+    expect(received).toHaveLength(1);
+    expect(received[0].normalized).toBeUndefined();
+  });
+
   it('does not re-emit envelopes when the input is itself a system envelope', () => {
     const { bus } = makeBus();
     const received: TerminalFrame[] = [];

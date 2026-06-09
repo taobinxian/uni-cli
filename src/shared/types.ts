@@ -126,6 +126,15 @@ export interface TerminalFrame {
    * without thinking about transport details.
    */
   seq?: number;
+  /**
+   * True when the server-side stream normaliser successfully derived one
+   * or more `history.message` envelope frames from this raw frame. The
+   * client uses it as a hint to skip its own raw-JSON conversion path so
+   * the same chat turn is not rendered twice (once from raw stdout JSON,
+   * once from the envelope). Always undefined on the envelope frames
+   * themselves — the marker only ever annotates the raw source frame.
+   */
+  normalized?: boolean;
 }
 
 export interface SessionHistory {

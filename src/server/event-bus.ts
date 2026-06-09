@@ -196,15 +196,20 @@ export class EventBus {
       payload: frame
     });
     this.bindNativeSessionId(frame);
+    // Derive normalised `history.message` envelope frames so every adapter
+    // produces uniform user/agent message events without each client having
+    // to re-parse the CLI-specific wire format.
+    const envelopes = extractEnvelopeFrames(frame);
+    // When at least one envelope was derived, mark the raw frame as
+    // `normalized` so the client knows to skip its own raw-JSON conversion
+    // path. Without this hint the client would also render the raw frame
+    // via `displayFromJson` and the same chat turn would appear twice.
+    const rawFrame: TerminalFrame = envelopes.length > 0 ? { ...frame, normalized: true } : frame;
     // Split & emit the raw frame as one or more chunks. Each chunk gets its
     // own seq so a client that disconnects mid-frame can reconnect with
     // `Last-Event-ID: <last-chunk-seq>` and recover only the missing tail.
-    this.fanOutChunks(frame);
-    // Derive normalised `history.message` envelope frames so every adapter
-    // produces uniform user/agent message events without each client having
-    // to re-parse the CLI-specific wire format. Envelope frames are split
-    // and seq-stamped exactly like the raw frame.
-    for (const envelope of extractEnvelopeFrames(frame)) {
+    this.fanOutChunks(rawFrame);
+    for (const envelope of envelopes) {
       this.fanOutChunks(envelope);
     }
   }
