@@ -115,6 +115,128 @@ describe('EventBus.terminal — envelope derivation', () => {
   });
 });
 
+describe('EventBus.terminal — native session binding', () => {
+  it('binds Codex workbench sessions to the thread id emitted by codex exec', () => {
+    const { bus, store } = makeBus();
+    store.upsertSession({
+      id: 'codex-runtime',
+      appId: 'codex',
+      title: 'runtime session',
+      status: 'running',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      live: true
+    });
+
+    bus.terminal({
+      sessionId: 'codex-runtime',
+      appId: 'codex',
+      stream: 'stdout',
+      text: JSON.stringify({ type: 'thread.started', thread_id: '019ea60a-382f-70e2-a14f-315bba2ad786' }) + '\n',
+      createdAt: '2026-01-01T00:00:01.000Z'
+    });
+
+    expect(store.getSession('codex-runtime')?.nativeId).toBe('019ea60a-382f-70e2-a14f-315bba2ad786');
+  });
+
+  it('does not bind Codex sessions to unrelated tool output containing thread_id', () => {
+    const { bus, store } = makeBus();
+    store.upsertSession({
+      id: 'codex-runtime',
+      appId: 'codex',
+      title: 'runtime session',
+      status: 'running',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      live: true
+    });
+
+    bus.terminal({
+      sessionId: 'codex-runtime',
+      appId: 'codex',
+      stream: 'stdout',
+      text: JSON.stringify({ type: 'tool_result', thread_id: '019ea60a-382f-70e2-a14f-315bba2ad786' }) + '\n',
+      createdAt: '2026-01-01T00:00:01.000Z'
+    });
+
+    expect(store.getSession('codex-runtime')?.nativeId).toBeUndefined();
+  });
+
+  it('backfills Codex native ids from persisted terminal events', () => {
+    const { store } = makeBus();
+    store.upsertSession({
+      id: 'codex-runtime',
+      appId: 'codex',
+      title: 'runtime session',
+      status: 'completed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      live: false
+    });
+    store.insertEvent({
+      id: 'event-codex-thread',
+      type: 'terminal.output',
+      appId: 'codex',
+      sessionId: 'codex-runtime',
+      message: 'thread started',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      payload: {
+        sessionId: 'codex-runtime',
+        appId: 'codex',
+        stream: 'stdout',
+        text: JSON.stringify({ type: 'thread.started', thread_id: '019ea60a-382f-70e2-a14f-315bba2ad786' }),
+        createdAt: '2026-01-01T00:00:01.000Z'
+      }
+    });
+
+    expect(store.backfillNativeSessionIdsFromEvents('codex')).toBe(1);
+    expect(store.getSession('codex-runtime')?.nativeId).toBe('019ea60a-382f-70e2-a14f-315bba2ad786');
+  });
+
+  it('does not backfill native ids from unrelated persisted thread_id output', () => {
+    const { store } = makeBus();
+    store.upsertSession({
+      id: 'codex-runtime',
+      appId: 'codex',
+      title: 'runtime session',
+      status: 'completed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      live: false
+    });
+    store.insertEvent({
+      id: 'event-tool-thread',
+      type: 'terminal.output',
+      appId: 'codex',
+      sessionId: 'codex-runtime',
+      message: 'tool result',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      payload: {
+        sessionId: 'codex-runtime',
+        appId: 'codex',
+        stream: 'stdout',
+        text: JSON.stringify({ type: 'tool_result', thread_id: '019ea60a-382f-70e2-a14f-315bba2ad786' }),
+        createdAt: '2026-01-01T00:00:01.000Z'
+      }
+    });
+
+    expect(store.backfillNativeSessionIdsFromEvents('codex')).toBe(0);
+    expect(store.getSession('codex-runtime')?.nativeId).toBeUndefined();
+  });
+});
+
 describe('EventBus.terminal — monotonic seq for SSE reconnect', () => {
   it('attaches a monotonically increasing seq to every emitted frame', () => {
     const { bus } = makeBus();

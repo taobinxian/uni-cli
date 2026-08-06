@@ -20,6 +20,8 @@ import { cleanInlineText } from '../shared/chat-stream.js';
 import { APP_ORDER, type AppId, type AppInfo, type Confirmation, type EventRecord, type Session, type TerminalFrame, type TimeScope, type TokenUsage, type UsagePoint } from '../shared/types.js';
 
 const appOrder = APP_ORDER;
+const WINDOW_TOKEN_SCOPES: Array<Exclude<TimeScope, 'all'>> = ['day', 'week', 'month'];
+const TOKEN_DIALOG_SCOPES: TimeScope[] = [...WINDOW_TOKEN_SCOPES, 'all'];
 const TOKEN_ALERT_THRESHOLD = 2_000_000;
 const INITIAL_HISTORY_PAGE_SIZE = 6;
 const HISTORY_PAGE_SIZE = 12;
@@ -49,6 +51,7 @@ const SHANGHAI_TIME_ZONE = 'Asia/Shanghai';
 type NavKey = 'overview' | 'sessions' | 'confirmations' | AppId;
 type FocusResizeSide = 'left' | 'right';
 type ThemeMode = 'light' | 'dark';
+type TokenDialogScope = TimeScope;
 interface FocusLayout {
   left: number;
   right: number;
@@ -1141,7 +1144,7 @@ function FocusTokenDock({ scope, setScope, totalTokens, onOpen }: { usage: Token
         {appOrder.map((appId) => <span key={appId} className={appId} />)}
       </div>
       <div className="focus-token-scopes">
-        {(['day', 'week', 'month'] as TimeScope[]).map((item) => (
+        {WINDOW_TOKEN_SCOPES.map((item) => (
           <button key={item} type="button" className={scope === item ? 'active' : ''} onClick={() => setScope(item)}>
             {item === 'day' ? '今日' : item === 'week' ? '本周' : '本月'}
           </button>
@@ -3537,8 +3540,6 @@ function shortDirectory(path: string): string {
   return `.../${parts.slice(-2).join('/')}`;
 }
 
-type TokenDialogScope = TimeScope | 'all';
-
 function TokenUsageDialog(props: { usage: TokenUsage[]; scope: TimeScope; setScope(scope: TimeScope): void; onClose(): void }) {
   const [activeScope, setActiveScope] = useState<TokenDialogScope>(props.scope);
   const [usageByScope, setUsageByScope] = useState<Partial<Record<TimeScope, TokenUsage[]>>>({ [props.scope]: props.usage });
@@ -3546,7 +3547,7 @@ function TokenUsageDialog(props: { usage: TokenUsage[]; scope: TimeScope; setSco
   useEffect(() => {
     let cancelled = false;
     setUsageByScope((current) => ({ ...current, [props.scope]: props.usage }));
-    Promise.all((['day', 'week', 'month'] as TimeScope[]).map(async (scope) => [scope, await getTokenUsage(scope)] as const))
+    Promise.all(TOKEN_DIALOG_SCOPES.map(async (scope) => [scope, await getTokenUsage(scope)] as const))
       .then((results) => {
         if (cancelled) return;
         const next: Partial<Record<TimeScope, TokenUsage[]>> = {};
@@ -3581,14 +3582,14 @@ function TokenUsageDialog(props: { usage: TokenUsage[]; scope: TimeScope; setSco
           <button type="button" className="focus-dialog-close" onClick={props.onClose} aria-label="关闭">×</button>
         </header>
         <div className="focus-token-segments" role="group" aria-label="Token 统计范围">
-          {(['day', 'week', 'month', 'all'] as TokenDialogScope[]).map((scope) => (
+          {TOKEN_DIALOG_SCOPES.map((scope) => (
             <button key={scope} type="button" className={activeScope === scope ? 'active' : ''} onClick={() => selectScope(scope)}>
               {scope === 'day' ? '今天' : scope === 'week' ? '本周' : scope === 'month' ? '本月' : '所有'}
             </button>
           ))}
         </div>
         <div className="focus-token-total">
-          <span>{activeScope === 'all' ? '已加载最大范围总量' : `${scopeLabel(activeScope)} 总量`}</span>
+          <span>{`${scopeLabel(activeScope)} 总量`}</span>
           <strong>{formatTokenCount(total)}</strong>
         </div>
         <div className="focus-token-stack" aria-hidden="true">
@@ -3628,9 +3629,6 @@ function TokenUsageDialog(props: { usage: TokenUsage[]; scope: TimeScope; setSco
 }
 
 function tokenDialogValue(appId: AppId, scope: TokenDialogScope, usageByScope: Partial<Record<TimeScope, TokenUsage[]>>): number {
-  if (scope === 'all') {
-    return Math.max(...(['day', 'week', 'month'] as TimeScope[]).map((item) => tokenDialogValue(appId, item, usageByScope)));
-  }
   return usageByScope[scope]?.find((row) => row.appId === appId)?.totalTokens ?? 0;
 }
 
@@ -4162,6 +4160,7 @@ function connectedCount(apps: AppInfo[]): number {
 function scopeLabel(scope: TimeScope): string {
   if (scope === 'day') return '今日';
   if (scope === 'week') return '本周';
+  if (scope === 'all') return '所有';
   return '本月';
 }
 

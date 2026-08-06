@@ -1,6 +1,9 @@
 import { APP_ORDER, type AppId, type Session, type TimeScope, type TokenUsage, type UsagePoint } from '../../shared/types.js';
-import { aggregateTokenUsage, scopeStart } from '../../shared/token.js';
+import { aggregateTokenUsage, scopeStart, type WindowTimeScope } from '../../shared/token.js';
 import { Store } from '../db.js';
+
+const WINDOW_SCOPES: WindowTimeScope[] = ['day', 'week', 'month'];
+const TOKEN_SCOPES: TimeScope[] = [...WINDOW_SCOPES, 'all'];
 
 export class TokenAggregator {
   private store: Store;
@@ -10,7 +13,7 @@ export class TokenAggregator {
   }
 
   refresh(reference = new Date()): void {
-    const rows = (['day', 'week', 'month'] as TimeScope[]).flatMap((scope) => {
+    const rows = TOKEN_SCOPES.flatMap((scope) => {
       const sessions = this.sessionsInScope(scope, reference);
       return aggregateTokenUsage(
         sessions.map((session) => ({
@@ -27,21 +30,22 @@ export class TokenAggregator {
   get(scope: TimeScope): { usage: TokenUsage[]; series: UsagePoint[] } {
     const reference = new Date();
     this.refresh(reference);
-    return { usage: this.store.listTokenUsage(scope), series: this.makeSeries(scope, reference) };
+    return { usage: this.store.listTokenUsage(scope), series: scope === 'all' ? [] : this.makeSeries(scope, reference) };
   }
 
   private sessionsInScope(scope: TimeScope, reference: Date): Session[] {
-    return this.store.listSessionsSince(scopeStart(reference, scope).toISOString());
+    if (scope === 'all') return this.store.listSessionsForTokenUsage();
+    return this.store.listSessionsForTokenUsage(scopeStart(reference, scope).toISOString());
   }
 
-  private makeSeries(scope: TimeScope, reference: Date): UsagePoint[] {
+  private makeSeries(scope: WindowTimeScope, reference: Date): UsagePoint[] {
     const start = scopeStart(reference, scope);
     const sessions = this.sessionsInScope(scope, reference);
     return bucketsFor(scope, start, reference).map((bucket) => pointFor(bucket.label, sessions, bucket.end));
   }
 }
 
-function bucketsFor(scope: TimeScope, start: Date, reference: Date): Array<{ label: string; end: Date }> {
+function bucketsFor(scope: WindowTimeScope, start: Date, reference: Date): Array<{ label: string; end: Date }> {
   if (scope === 'day') {
     return [0, 6, 12, 18]
       .map((hour) => {

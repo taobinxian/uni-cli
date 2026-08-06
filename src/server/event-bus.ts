@@ -4,7 +4,7 @@ import type { ServerResponse } from 'node:http';
 import type { FastifyInstance } from 'fastify';
 import websocket from '@fastify/websocket';
 import type { EventRecord, EventType, TerminalFrame } from '../shared/types.js';
-import { extractUsageFromText } from '../shared/parsers.js';
+import { extractUsageFromText, parseJsonLine } from '../shared/parsers.js';
 import { cleanInlineText, splitTextByGraphemes } from '../shared/chat-stream.js';
 import { now, Store } from './db.js';
 import { extractEnvelopeFrames } from './adapters/stream-normalizer.js';
@@ -14,6 +14,7 @@ type SessionTailProvider = (sessionId: string) => Promise<TerminalFrame[]>;
 
 /** Maximum buffered frames retained per session for SSE replay. */
 const SESSION_HISTORY_LIMIT = Math.max(300, readPositiveIntEnv('WORKBENCH_SSE_HISTORY_LIMIT', 1000));
+const NATIVE_SESSION_ID_APPS = new Set(['claude', 'codex', 'opencode', 'oh-my-pi']);
 
 /**
  * Read a positive-integer env variable, falling back to `fallback` when the
@@ -179,7 +180,7 @@ export class EventBus {
     // Side-effects on the *whole* raw frame, not on chunks: token extraction
     // (would double-count if split) and the `terminal.output` event message
     // (a single human-readable line per logical CLI write).
-    const usage = extractUsageFromText(frame.text);
+    const usage = extractUsageFromText(frame.text, { canonicalUsageTotals: frame.appId === 'codex' });
     const tokenDelta = usage.inputTokens + usage.outputTokens;
     if (tokenDelta > 0) {
       this.store.incrementSessionTokens(frame.sessionId, usage.inputTokens, usage.outputTokens);
@@ -282,8 +283,8 @@ export class EventBus {
   }
 
   private bindNativeSessionId(frame: TerminalFrame): void {
-    if (frame.appId !== 'claude' && frame.appId !== 'opencode' && frame.appId !== 'oh-my-pi') return;
-    const nativeId = nativeSessionIdFromText(frame.text);
+    if (!NATIVE_SESSION_ID_APPS.has(frame.appId)) return;
+    const nativeId = nativeSessionIdFromText(frame.text, frame.appId);
     if (!nativeId) return;
     const updated = this.store.updateSessionNativeId(frame.sessionId, nativeId);
     if (updated) {
@@ -543,12 +544,33 @@ function splitPlainTerminalFrame(frame: TerminalFrame): TerminalFrame[] {
   return chunks;
 }
 
-function nativeSessionIdFromText(text: string): string | undefined {
+function nativeSessionIdFromText(text: string, appId: TerminalFrame['appId']): string | undefined {
   for (const line of text.split('\n')) {
+    const parsed = parseJsonLine(line);
+    if (parsed && typeof parsed === 'object') {
+      const nativeId = nativeSessionIdFromJson(parsed as Record<string, unknown>, appId);
+      if (nativeId) return nativeId;
+    }
     const match = /"(?:session_id|sessionID)"\s*:\s*"([^"]{8,})"/.exec(line);
     if (match) return match[1];
   }
   return undefined;
+}
+
+function nativeSessionIdFromJson(record: Record<string, unknown>, appId: TerminalFrame['appId']): string | undefined {
+  const sessionId = stringNativeId(record.session_id ?? record.sessionID);
+  if (sessionId) return sessionId;
+  if (appId !== 'codex' || record.type !== 'thread.started') return undefined;
+  const threadId = stringNativeId(record.thread_id);
+  return threadId && isUuid(threadId) ? threadId : undefined;
+}
+
+function stringNativeId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length >= 8 ? value : undefined;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
 function terminalFrameKey(frame: TerminalFrame): string {

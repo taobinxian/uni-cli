@@ -118,7 +118,7 @@ export class AntigravityAdapter implements Adapter {
         .split('\n')
         .map(parseJsonLine)
         .filter(Boolean)
-        .map(extractUsage)
+        .map((row) => extractUsage(row))
         .reduce(
           (acc, next) => ({ inputTokens: acc.inputTokens + next.inputTokens, outputTokens: acc.outputTokens + next.outputTokens }),
           { inputTokens: 0, outputTokens: 0 }

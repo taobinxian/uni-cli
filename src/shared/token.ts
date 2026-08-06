@@ -1,5 +1,7 @@
 import { APP_ORDER, type AppId, type TimeScope, type TokenUsage } from './types.js';
 
+export type WindowTimeScope = Exclude<TimeScope, 'all'>;
+
 export function aggregateTokenUsage(
   rows: Array<{ appId: AppId; inputTokens: number; outputTokens: number }>,
   scope: TimeScope
@@ -18,7 +20,7 @@ export function aggregateTokenUsage(
   return Object.values(empty);
 }
 
-export function scopeStart(now: Date, scope: TimeScope): Date {
+export function scopeStart(now: Date, scope: WindowTimeScope): Date {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   if (scope === 'week') {
