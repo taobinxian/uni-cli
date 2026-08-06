@@ -8,7 +8,7 @@ export type TaskStatus = 'running' | 'completed' | 'stopped' | 'interrupted' | '
 
 export type BillingMode = 'subscription' | 'usage' | 'included';
 
-export type TimeScope = 'day' | 'week' | 'month';
+export type TimeScope = 'day' | 'week' | 'month' | 'all';
 
 export type EventType =
   | 'task.updated'

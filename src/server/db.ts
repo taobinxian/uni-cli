@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { parseJsonLine } from '../shared/parsers.js';
 import type {
   AppId,
   AppInfo,
@@ -116,6 +117,13 @@ export class Store {
     return row ? mapSession(row) : undefined;
   }
 
+  listSessionsByNativeId(appId: AppId, nativeId: string): Session[] {
+    return this.db
+      .prepare('SELECT * FROM sessions WHERE app_id = ? AND native_id = ? ORDER BY live DESC, updated_at DESC')
+      .all(appId, nativeId)
+      .map(mapSession);
+  }
+
   updateSessionNativeId(sessionId: string, nativeId: string): Session | undefined {
     const session = this.getSession(sessionId);
     if (!session || session.nativeId === nativeId) return undefined;
@@ -134,7 +142,7 @@ export class Store {
         SELECT session_id, payload FROM events
         WHERE app_id = ?
           AND session_id IS NOT NULL
-          AND (payload LIKE '%session_id%' OR payload LIKE '%sessionID%')
+          AND (payload LIKE '%session_id%' OR payload LIKE '%sessionID%' OR payload LIKE '%thread_id%')
         ORDER BY created_at DESC
         LIMIT 4000
       `
@@ -145,7 +153,7 @@ export class Store {
     for (const row of rows) {
       if (!row.session_id || !row.payload) continue;
       if (seenSessions.has(row.session_id)) continue;
-      const nativeId = nativeSessionIdFromPayload(row.payload);
+      const nativeId = nativeSessionIdFromPayload(row.payload, appId);
       if (!nativeId) continue;
       seenSessions.add(row.session_id);
       if (this.updateSessionNativeId(row.session_id, nativeId)) changed += 1;
@@ -161,9 +169,12 @@ export class Store {
     return rows.map(mapSession);
   }
 
-  pruneMissingImportedSessions(appId: AppId, importedSessionIds: string[]): number {
-    if (!importedSessionIds.length) return 0;
-    const placeholders = importedSessionIds.map(() => '?').join(', ');
+  pruneMissingImportedSessions(appId: AppId, importedSessionIds: string[], importedNativeIds = importedSessionIds): number {
+    const ids = uniqueStrings(importedSessionIds);
+    const nativeIds = uniqueStrings(importedNativeIds);
+    if (!ids.length && !nativeIds.length) return 0;
+    const idClause = ids.length ? `id NOT IN (${ids.map(() => '?').join(', ')})` : '1 = 1';
+    const nativeClause = nativeIds.length ? `(native_id IS NULL OR native_id NOT IN (${nativeIds.map(() => '?').join(', ')}))` : '1 = 1';
     const removableRows = this.db
       .prepare(
         `
@@ -171,40 +182,73 @@ export class Store {
         WHERE app_id = ?
           AND live = 0
           AND native_id IS NOT NULL
-          AND id NOT IN (${placeholders})
+          AND ${idClause}
+          AND ${nativeClause}
           AND NOT EXISTS (SELECT 1 FROM command_runs WHERE command_runs.session_id = sessions.id)
           AND NOT EXISTS (SELECT 1 FROM events WHERE events.session_id = sessions.id)
       `
       )
-      .all(appId, ...importedSessionIds) as Array<{ id: string }>;
-    const ids = removableRows.map((row) => row.id);
-    if (!ids.length) return 0;
-    const deletePlaceholders = ids.map(() => '?').join(', ');
+      .all(appId, ...ids, ...nativeIds) as Array<{ id: string }>;
+    const removableIds = removableRows.map((row) => row.id);
+    if (!removableIds.length) return 0;
+    const deletePlaceholders = removableIds.map(() => '?').join(', ');
     this.db.exec('BEGIN');
     try {
-      this.db.prepare(`DELETE FROM confirmations WHERE session_id IN (${deletePlaceholders})`).run(...ids);
-      this.db.prepare(`DELETE FROM command_runs WHERE session_id IN (${deletePlaceholders})`).run(...ids);
-      this.db.prepare(`DELETE FROM events WHERE session_id IN (${deletePlaceholders})`).run(...ids);
-      this.db.prepare(`DELETE FROM tasks WHERE session_id IN (${deletePlaceholders})`).run(...ids);
-      this.db.prepare(`DELETE FROM sessions WHERE id IN (${deletePlaceholders})`).run(...ids);
+      this.db.prepare(`DELETE FROM confirmations WHERE session_id IN (${deletePlaceholders})`).run(...removableIds);
+      this.db.prepare(`DELETE FROM command_runs WHERE session_id IN (${deletePlaceholders})`).run(...removableIds);
+      this.db.prepare(`DELETE FROM events WHERE session_id IN (${deletePlaceholders})`).run(...removableIds);
+      this.db.prepare(`DELETE FROM tasks WHERE session_id IN (${deletePlaceholders})`).run(...removableIds);
+      this.db.prepare(`DELETE FROM sessions WHERE id IN (${deletePlaceholders})`).run(...removableIds);
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
     }
     this.syncAppCounts(appId);
-    return ids.length;
+    return removableIds.length;
   }
 
   listSessionsSince(sinceIso: string): Session[] {
-    return this.db
-      .prepare(`
-        SELECT * FROM sessions
-        WHERE updated_at >= ?
-        ORDER BY updated_at DESC
-      `)
-      .all(sinceIso)
-      .map(mapSession);
+    return this.listSessionsForTokenUsage(sinceIso);
+  }
+
+  listSessionsForTokenUsage(sinceIso?: string): Session[] {
+    const where = sinceIso ? 'WHERE updated_at >= ?' : '';
+    const rows = sinceIso
+      ? this.db
+          .prepare(`
+            SELECT * FROM sessions
+            ${where}
+            ORDER BY updated_at DESC
+          `)
+          .all(sinceIso)
+      : this.db
+          .prepare(`
+            SELECT * FROM sessions
+            ORDER BY updated_at DESC
+          `)
+          .all();
+    return rows.map(mapSession);
+  }
+
+  mergeDuplicateSession(targetSessionId: string, duplicateSessionId: string): void {
+    if (targetSessionId === duplicateSessionId) return;
+    const target = this.getSession(targetSessionId);
+    const duplicate = this.getSession(duplicateSessionId);
+    if (!target || !duplicate || target.appId !== duplicate.appId) return;
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('UPDATE events SET session_id = ? WHERE session_id = ?').run(targetSessionId, duplicateSessionId);
+      this.db.prepare('UPDATE command_runs SET session_id = ? WHERE session_id = ?').run(targetSessionId, duplicateSessionId);
+      this.db.prepare('UPDATE confirmations SET session_id = ? WHERE session_id = ?').run(targetSessionId, duplicateSessionId);
+      this.db.prepare('DELETE FROM tasks WHERE session_id = ?').run(duplicateSessionId);
+      this.db.prepare('DELETE FROM sessions WHERE id = ?').run(duplicateSessionId);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    this.syncAppCounts(target.appId);
   }
 
   incrementSessionTokens(sessionId: string, inputDelta: number, outputDelta: number): Session | undefined {
@@ -686,6 +730,10 @@ function nullable(value: unknown): string | undefined {
   return typeof value === 'string' && value.length ? value : undefined;
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
 function terminalFrameFromPayload(payload: string | undefined, sessionId: string, appId: AppId | undefined, createdAt: string): TerminalFrame | undefined {
   if (!payload) return undefined;
   try {
@@ -710,21 +758,42 @@ function safeToken(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 }
 
-function nativeSessionIdFromPayload(payload: string): string | undefined {
+function nativeSessionIdFromPayload(payload: string, appId: AppId): string | undefined {
   try {
     const parsed = JSON.parse(payload) as unknown;
     const text = parsed && typeof parsed === 'object' ? (parsed as { text?: unknown }).text : undefined;
-    if (typeof text === 'string') return nativeSessionIdFromText(text);
+    if (typeof text === 'string') return nativeSessionIdFromText(text, appId);
   } catch {
-    return nativeSessionIdFromText(payload);
+    return nativeSessionIdFromText(payload, appId);
   }
-  return nativeSessionIdFromText(payload);
+  return nativeSessionIdFromText(payload, appId);
 }
 
-function nativeSessionIdFromText(text: string): string | undefined {
+function nativeSessionIdFromText(text: string, appId: AppId): string | undefined {
   for (const line of text.split('\n')) {
+    const parsed = parseJsonLine(line);
+    if (parsed && typeof parsed === 'object') {
+      const nativeId = nativeSessionIdFromJson(parsed as Record<string, unknown>, appId);
+      if (nativeId) return nativeId;
+    }
     const match = /"(?:session_id|sessionID)"\s*:\s*"([^"]{8,})"/.exec(line);
     if (match) return match[1];
   }
   return undefined;
+}
+
+function nativeSessionIdFromJson(record: Record<string, unknown>, appId: AppId): string | undefined {
+  const sessionId = stringNativeId(record.session_id ?? record.sessionID);
+  if (sessionId) return sessionId;
+  if (appId !== 'codex' || record.type !== 'thread.started') return undefined;
+  const threadId = stringNativeId(record.thread_id);
+  return threadId && isUuid(threadId) ? threadId : undefined;
+}
+
+function stringNativeId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length >= 8 ? value : undefined;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }

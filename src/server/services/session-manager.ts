@@ -216,8 +216,11 @@ export class SessionManager {
     const merged =
       existing && this.runtimeActiveSessionIds.has(existing.id) && isActiveSession(existing)
         ? mergeHistoricalSession(existing, session)
-        : session;
+        : existing && existing.id !== session.id
+          ? adoptHistoricalSession(existing, session)
+          : session;
     this.store.upsertSession(merged);
+    if (existing && existing.id !== session.id) this.store.mergeDuplicateSession(merged.id, session.id);
     this.store.upsertTask(taskFromSession(merged, merged.title));
   }
 
@@ -245,14 +248,17 @@ export class SessionManager {
   }
 
   private findExistingSession(session: Session): Session | undefined {
-    return this.store.getSession(session.id) ?? (session.nativeId ? this.store.getSessionByNativeId(session.appId, session.nativeId) : undefined);
+    const nativeMatches = session.nativeId ? this.store.listSessionsByNativeId(session.appId, session.nativeId) : [];
+    return nativeMatches.find((item) => item.id !== session.id) ?? this.store.getSession(session.id) ?? nativeMatches[0];
   }
 
   private pruneMissingImportedSessions(appId: AppId, sessions: Session[]): void {
-    if (!sessions.length) return;
+    const imported = sessions.filter((session) => session.nativeId);
+    if (!imported.length) return;
     this.store.pruneMissingImportedSessions(
       appId,
-      sessions.filter((session) => session.nativeId).map((session) => session.id)
+      imported.map((session) => session.id),
+      imported.map((session) => session.nativeId!)
     );
   }
 
@@ -719,6 +725,18 @@ function mergeHistoricalSession(existing: Session, historical: Session): Session
     outputTokens: Math.max(existing.outputTokens, historical.outputTokens),
     totalTokens: Math.max(existing.totalTokens, historical.totalTokens),
     live: existing.live
+  };
+}
+
+function adoptHistoricalSession(existing: Session, historical: Session): Session {
+  return {
+    ...historical,
+    id: existing.id,
+    nativeId: historical.nativeId ?? existing.nativeId,
+    cwd: historical.cwd ?? existing.cwd,
+    model: historical.model ?? existing.model,
+    createdAt: earlierIso(existing.createdAt, historical.createdAt),
+    updatedAt: laterIso(existing.updatedAt, historical.updatedAt)
   };
 }
 
